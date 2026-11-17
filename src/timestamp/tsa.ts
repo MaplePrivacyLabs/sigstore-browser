@@ -16,7 +16,9 @@
 import { base64ToUint8Array, uint8ArrayEqual } from "@freedomofpress/crypto-browser";
 
 import { assertTimestampVerificationData } from "../bundle.js";
+import { fail, VerificationError } from "../errors.js";
 import { parseValidityPeriod, RawTimestampAuthority } from "../interfaces.js";
+import { RFC3161TimestampVerificationError } from "../rfc3161/error.js";
 import { RFC3161Timestamp } from "../rfc3161/index.js";
 import { CertificateChainVerifier, X509Certificate } from "../x509/index.js";
 
@@ -210,4 +212,86 @@ export async function verifyBundleTimestamp(
   }
 
   return verifiedResults;
+}
+
+/**
+ * Verifies every RFC 3161 timestamp in a bundle over `signature`, like verifyBundleTimestamp, but
+ * reports why one fails with a VerificationError code: "timestamp-malformed",
+ * "timestamp-untrusted-authority" (no trusted authority, valid at the timestamp's time, issued it),
+ * "timestamp-message-mismatch" (it covers another signature), "timestamp-signature-invalid" or
+ * "timestamp-duplicate". Only certificates from the trusted root are used, never ones in the token.
+ */
+export async function verifyBundleTimestampForSignature(
+  timestampData: unknown,
+  signature: Uint8Array,
+  timestampAuthorities: RawTimestampAuthority[]
+): Promise<VerifiedTimestamp[]> {
+  assertTimestampVerificationData(timestampData);
+  const verified: Array<VerifiedTimestamp & { signerSerialNumber: string }> = [];
+
+  for (const tsData of timestampData?.rfc3161Timestamps ?? []) {
+    let timestamp: RFC3161Timestamp;
+    let signerSerialNumber: Uint8Array;
+    let signerIssuer: Uint8Array;
+    let signingTime: Date;
+    try {
+      timestamp = RFC3161Timestamp.parse(base64ToUint8Array(tsData.signedTimestamp));
+      signerSerialNumber = timestamp.signerSerialNumber;
+      signerIssuer = timestamp.signerIssuer;
+      signingTime = timestamp.signingTime;
+    } catch (e) {
+      fail("timestamp-malformed", `Malformed RFC 3161 timestamp: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    const candidates = filterCAsBySerialAndIssuer(
+      filterCertAuthorities(timestampAuthorities, signingTime),
+      { serialNumber: signerSerialNumber, issuer: signerIssuer },
+    );
+    // The failure from an authority whose chain verified says more than an untrusted chain.
+    let failure: VerificationError | undefined;
+    let authority: RawTimestampAuthority | undefined;
+    for (const ca of candidates) {
+      let publicKey: CryptoKey;
+      try {
+        publicKey = await verifiedAuthorityKey(ca, signingTime);
+      } catch (e) {
+        failure ??= new VerificationError("timestamp-untrusted-authority", e instanceof Error ? e.message : String(e));
+        continue;
+      }
+      try {
+        await timestamp.verify(signature, publicKey);
+        authority = ca;
+        break;
+      } catch (e) {
+        failure = e instanceof RFC3161TimestampVerificationError
+          ? new VerificationError(e.code, `RFC 3161 timestamp: ${e.message}`)
+          : new VerificationError("timestamp-malformed", `RFC 3161 timestamp: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (!authority) {
+      throw failure ?? new VerificationError(
+        "timestamp-untrusted-authority",
+        "RFC 3161 timestamp was not issued by a timestamp authority in the trusted root",
+      );
+    }
+
+    const serial = Array.from(signerSerialNumber).join(",");
+    if (verified.some((v) => v.signingTime.getTime() === signingTime.getTime() && v.signerSerialNumber === serial)) {
+      fail("timestamp-duplicate", "Duplicate TSA timestamp detected");
+    }
+    verified.push({ signingTime, operator: authority.operator || "", signerSerialNumber: serial });
+  }
+
+  return verified.map(({ signingTime, operator }) => ({ signingTime, operator }));
+}
+
+// The authority's signing key, once its certificate chain from the trusted root verifies at `signingTime`.
+async function verifiedAuthorityKey(ca: RawTimestampAuthority, signingTime: Date): Promise<CryptoKey> {
+  const [leaf, ...rest] = ca.certChain.certificates.map((cert) => X509Certificate.parse(base64ToUint8Array(cert.rawBytes)));
+  try {
+    await new CertificateChainVerifier({ untrustedCert: leaf, trustedCerts: rest, timestamp: signingTime }).verify();
+  } catch (e) {
+    throw new Error(`TSA certificate chain verification failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return leaf.publicKeyObj;
 }
