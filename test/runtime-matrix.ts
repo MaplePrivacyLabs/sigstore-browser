@@ -1,0 +1,72 @@
+// Runs the managed-key corpus (strict and default configurations, DSSE/artifact/digest) and the
+// sigstore-conformance vectors against the built library, outside any test framework, so the same
+// checks run unchanged on Node and Bun:
+//
+//   npm run build && node test/runtime-matrix.ts && bun test/runtime-matrix.ts
+//   NO_NATIVE_ED25519=1 node test/runtime-matrix.ts   # Ed25519 through the @noble/curves fallback
+//
+// Exits non-zero on any mismatch.
+import { checkConformance, checkManagedKeyCorpus, type Lib, type Mismatch } from "./corpus/check.ts";
+import { loadCorpus } from "./corpus/data.ts";
+
+const runtime = typeof (globalThis as { Bun?: { version: string } }).Bun !== "undefined"
+  ? `bun ${(globalThis as unknown as { Bun: { version: string } }).Bun.version}`
+  : `node ${process.versions.node}`;
+
+const noble = await import("@freedomofpress/crypto-browser/noble");
+const cryptoBrowser = await import("@freedomofpress/crypto-browser");
+let ed25519 = "native";
+if (process.env.NO_NATIVE_ED25519) {
+  // A SubtleCrypto that rejects Ed25519 like engines without it.
+  const real = globalThis.crypto.subtle;
+  const noEd25519 = new Proxy(real, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop) as unknown;
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        const alg = (prop === "importKey" ? args[2] : args[0]) as { name?: string } | string | undefined;
+        if ((typeof alg === "string" ? alg : alg?.name) === "Ed25519") {
+          return Promise.reject(new DOMException("Unrecognized name.", "NotSupportedError"));
+        }
+        return (value as (...a: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+  // Install it globally where the runtime allows (Node); Bun's crypto.subtle cannot be replaced.
+  try {
+    Object.defineProperty(globalThis.crypto, "subtle", { value: noEd25519, configurable: true });
+  } catch {
+    // Bun: route crypto-browser (which every library helper uses) through it instead.
+  }
+  // What installEd25519Fallback() does on an engine without Ed25519.
+  cryptoBrowser.setSubtle(noble.withEd25519Fallback(noEd25519));
+  const subtle = await cryptoBrowser.getSubtle();
+  const probe = await subtle.importKey("raw", new Uint8Array(32), { name: "Ed25519" }, true, ["verify"]);
+  if ((probe as unknown as { __fallback__?: boolean }).__fallback__ !== true) {
+    throw new Error("Ed25519 keys are still native; the fallback would not run");
+  }
+  const direct = await noEd25519.importKey("raw", new Uint8Array(32), { name: "Ed25519" }, true, ["verify"]).then(() => "native", () => "rejected");
+  ed25519 = `@noble/curves fallback (native Ed25519 ${direct})`;
+}
+
+const lib = (await import(new URL("../dist/index.js", import.meta.url).href)) as Lib;
+const corpus = loadCorpus();
+const mismatches: Mismatch[] = [];
+const counts: string[] = [];
+for (const mode of ["strict", "default"] as const) {
+  for (const how of ["dsse", "artifact", "digest"] as const) {
+    const found = await checkManagedKeyCorpus(lib, corpus.managedKey, mode, how);
+    counts.push(`managed-key ${mode}/${how}: ${corpus.managedKey.length - found.length}/${corpus.managedKey.length}`);
+    mismatches.push(...found);
+  }
+}
+const conformance = await checkConformance(lib, corpus.conformance, noble.verifySignatureOverDigest);
+counts.push(`conformance (artifact+digest): ${corpus.conformance.length * 2 - conformance.length}/${corpus.conformance.length * 2}`);
+mismatches.push(...conformance);
+
+console.log(`${runtime}, Ed25519 ${ed25519}`);
+for (const line of counts) console.log(`  ${line}`);
+for (const m of mismatches) {
+  console.log(`  MISMATCH ${m.how} ${m.id}: expected ${JSON.stringify(m.expected)}, got ${JSON.stringify(m.actual)}`);
+}
+process.exitCode = mismatches.length ? 1 : 0;
