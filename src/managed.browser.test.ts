@@ -130,9 +130,18 @@ describe("ManagedKeyVerifier", () => {
     ]) {
       expect(await reason(strict.verifyDsse(relabel(mediaType), r1.key))).toBe("media-type-unsupported");
     }
-    expect(await reason(strict.verifyDsse(relabel("application/vnd.dev.sigstore.bundle+json;version=0.3"), r1.key))).toBe("accept");
-    // By default, as for certificate bundles, v0.2 and v0.3 are accepted and v0.1 is not.
+    // The strict profile requires the canonical spelling exactly; the legacy spelling of v0.3 is refused.
+    const legacy = relabel("application/vnd.dev.sigstore.bundle+json;version=0.3");
+    expect(await reason(strict.verifyDsse(legacy, r1.key))).toBe("media-type-unsupported");
+    expect(await reason(strict.verifyDsse(relabel("application/vnd.dev.sigstore.bundle.v0.3+json"), r1.key))).toBe("accept");
+    // By default, as for certificate bundles, both spellings of v0.2 and v0.3 are accepted and v0.1 is not.
     const lenient = await verifier({});
+    expect(await reason(lenient.verifyDsse(legacy, r1.key))).toBe("accept");
+    // The option alone, with the default versions.
+    const canonical = await verifier({ requireCanonicalMediaType: true });
+    expect(await reason(canonical.verifyDsse(legacy, r1.key))).toBe("media-type-unsupported");
+    expect(await reason(canonical.verifyDsse(relabel("application/vnd.dev.sigstore.bundle+json;version=0.2"), r1.key))).toBe("media-type-unsupported");
+    expect(await reason(canonical.verifyDsse(relabel("application/vnd.dev.sigstore.bundle.v0.2+json"), r1.key))).toBe("accept");
     expect(await reason(lenient.verifyDsse(relabel("application/vnd.dev.sigstore.bundle.v0.2+json"), r1.key))).toBe("accept");
     expect(await reason(lenient.verifyDsse(relabel("application/vnd.dev.sigstore.bundle.v0.1+json"), r1.key))).toBe("media-type-unsupported");
   });

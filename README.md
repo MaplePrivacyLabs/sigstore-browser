@@ -110,7 +110,8 @@ try {
 ```
 
 `verifyArtifact(bundle, publicKey, data, isDigestOnly)` checks a `messageSignature`, or an in-toto
-subject, against the artifact or its SHA-256 digest.
+subject, against the artifact or its SHA-256 digest. It accepts either content type whatever the
+options; to require a DSSE envelope, call `verifyDsse`.
 
 The key you pass is the only key used. A bundle's `publicKey.hint` never selects or installs a
 key, there is no certificate or identity fallback, and a bundle carrying a certificate is
@@ -131,7 +132,8 @@ Stricter options, all off by default and all on in `STRICT_MANAGED_KEY_PROFILE`:
 
 | Option | Effect |
 | --- | --- |
-| `bundleVersions: ["0.3"]` | Only the v0.3 media type |
+| `bundleVersions: ["0.3"]` | Only bundle v0.3 |
+| `requireCanonicalMediaType` | Only the canonical spelling `application/vnd.dev.sigstore.bundle.vX.Y+json`, not the legacy `application/vnd.dev.sigstore.bundle+json;version=X.Y` (with the line above: exactly `application/vnd.dev.sigstore.bundle.v0.3+json`) |
 | `rejectDuplicateKeys` | Reject JSON that repeats a member name anywhere (needs the bundle as text or bytes) |
 | `requireSingleTlogEntry` | Exactly one transparency log entry; an extra one fails, with or without a proof |
 | `allowedEntryKinds: ["hashedrekord/0.0.2"]` | Only Rekor v2 hashedrekord entries |

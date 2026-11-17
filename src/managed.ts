@@ -58,6 +58,12 @@ export interface ManagedKeyVerifierOptions {
 
   // The options below go beyond the certificate flow's checks. All default to off.
 
+  /**
+   * Accept only the canonical media type spelling, application/vnd.dev.sigstore.bundle.vX.Y+json,
+   * not the legacy application/vnd.dev.sigstore.bundle+json;version=X.Y.
+   */
+  requireCanonicalMediaType?: boolean;
+
   /** Reject JSON that repeats a member name in any object. The bundle must then be passed as text or bytes. */
   rejectDuplicateKeys?: boolean;
   /** Require exactly one transparency log entry; an additional entry fails, with or without its own proof. */
@@ -80,12 +86,13 @@ export interface ManagedKeyVerifierOptions {
 }
 
 /**
- * Strict profile for managed-key DSSE bundles: v0.3 only, unambiguous JSON, exactly one Rekor v2
+ * Strict profile for managed-key DSSE bundles: exactly the canonical v0.3 media type, unambiguous JSON, exactly one Rekor v2
  * hashedrekord entry without Rekor v1 metadata, exactly one RFC 3161 timestamp, and checkpoints bound
  * to the entry's log.
  */
 export const STRICT_MANAGED_KEY_PROFILE: Readonly<ManagedKeyVerifierOptions> = Object.freeze({
   bundleVersions: ["0.3"],
+  requireCanonicalMediaType: true,
   rejectDuplicateKeys: true,
   requireSingleTlogEntry: true,
   allowedEntryKinds: ["hashedrekord/0.0.2"],
@@ -389,6 +396,9 @@ export class ManagedKeyVerifier {
       version = getBundleVersion(typeof parsed.mediaType === "string" ? parsed.mediaType : "", this.bundleVersions);
     } catch {
       fail("media-type-unsupported", `Unsupported bundle media type: ${String(parsed.mediaType)}`);
+    }
+    if (opts.requireCanonicalMediaType && parsed.mediaType !== `application/vnd.dev.sigstore.bundle.v${version}+json`) {
+      fail("media-type-unsupported", `Bundle media type must be spelled application/vnd.dev.sigstore.bundle.v${version}+json`);
     }
     if (!isObj(vm) || !isObj(vm.publicKey)) {
       fail("verification-material-unsupported", "Managed-key verification needs a bundle with publicKey verification material");
