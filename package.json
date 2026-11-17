@@ -23,6 +23,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "prepare": "tsc",
     "test": "vitest run --config vite.config.playwright.ts",
     "test:node": "vitest run",
     "test:browsers": "BROWSERS=chromium,firefox,webkit vitest run --config vite.config.playwright.ts",

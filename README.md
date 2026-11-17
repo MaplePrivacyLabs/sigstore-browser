@@ -25,6 +25,22 @@ This is a browser-compatible alternative to [sigstore-js](https://github.com/sig
 npm install @freedomofpress/sigstore-browser
 ```
 
+### Installing from a Git commit
+
+`dist/` is not committed; a `prepare` script builds it with `tsc` when the package is installed
+from Git. npm installs the package's dev dependencies for that and builds it without further setup.
+Bun does not run a dependency's lifecycle scripts unless it is trusted, and does not install its
+dev dependencies, so list the package in `trustedDependencies` and have `typescript` and
+`@types/node` among your own dependencies:
+
+```json
+{
+  "dependencies": { "@freedomofpress/sigstore-browser": "git+https://github.com/<owner>/sigstore-browser.git#<commit>" },
+  "devDependencies": { "typescript": "<version>", "@types/node": "<version>" },
+  "trustedDependencies": ["@freedomofpress/sigstore-browser"]
+}
+```
+
 ## Usage
 
 ### Basic Verification
