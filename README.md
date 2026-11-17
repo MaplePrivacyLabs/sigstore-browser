@@ -86,6 +86,66 @@ The `verifyArtifact` method performs the following checks:
 Use `verifyArtifactPolicy(policy, bundle, artifactData, isDigestOnly)` to enforce a custom `VerificationPolicy`, including the required identity and issuer checks.
 Policies may be synchronous or asynchronous; asynchronous policies are awaited before verification continues.
 
+## Managed-Key Bundles
+
+`ManagedKeyVerifier` verifies bundles signed with a key you already trust instead of a Fulcio
+certificate, for example a KMS key used through `cosign attest-blob --key`. It handles ECDSA
+P-256 and P-384 keys, including P-384 DSSE bundles that Cosign logs in Rekor v2 as
+`hashedrekord` 0.0.2 entries (SHA-384 of the DSSE pre-authentication encoding).
+
+```typescript
+import { ManagedKeyVerifier, STRICT_MANAGED_KEY_PROFILE, VerificationError } from '@freedomofpress/sigstore-browser';
+
+const verifier = new ManagedKeyVerifier(STRICT_MANAGED_KEY_PROFILE); // or new ManagedKeyVerifier() for the defaults
+await verifier.loadTrustedRoot(trustedRootJson); // or await verifier.loadTrustedRootWithTUF();
+
+try {
+  // bundleJson: the bundle as text (or UTF-8 bytes); publicKeyPem: the key you trust (PEM or DER SPKI)
+  const { payloadType, payload, timestamps } = await verifier.verifyDsse(bundleJson, publicKeyPem);
+  // Check the statement in `payload` (subject, predicate) yourself.
+} catch (e) {
+  if (e instanceof VerificationError) console.error(e.code, e.message); // e.g. "tlog-key-mismatch"
+  throw e;
+}
+```
+
+`verifyArtifact(bundle, publicKey, data, isDigestOnly)` checks a `messageSignature`, or an in-toto
+subject, against the artifact or its SHA-256 digest.
+
+The key you pass is the only key used. A bundle's `publicKey.hint` never selects or installs a
+key, there is no certificate or identity fallback, and a bundle carrying a certificate is
+rejected. Every failure is a `VerificationError` whose `code` is one of `REASON_CODES`.
+
+By default the checks match the certificate flow: bundle v0.2 and v0.3; every entry from a trusted
+log fully verified (inclusion proof, checkpoint signed by that entry's log key with witness
+cosignatures ignored, entry body bound to the key, signature and digest; inclusion promise if
+present); every RFC 3161 timestamp verified against the trusted root's authorities, never against
+certificates embedded in the token; at least one verified observer time. For a Rekor v2 entry the
+logged key details, digest algorithm and digest length must agree with the key.
+
+Loading the trusted root is per key: a log key or timestamp authority that this runtime cannot
+load (an unsupported or malformed key, Ed25519 without native support or the fallback) or that has
+been retired only affects entries that need it. Fulcio CAs and CT logs are not used.
+
+Stricter options, all off by default and all on in `STRICT_MANAGED_KEY_PROFILE`:
+
+| Option | Effect |
+| --- | --- |
+| `bundleVersions: ["0.3"]` | Only the v0.3 media type |
+| `rejectDuplicateKeys` | Reject JSON that repeats a member name anywhere (needs the bundle as text or bytes) |
+| `requireSingleTlogEntry` | Exactly one transparency log entry; an extra one fails, with or without a proof |
+| `allowedEntryKinds: ["hashedrekord/0.0.2"]` | Only Rekor v2 hashedrekord entries |
+| `rejectIntegratedTime`, `rejectInclusionPromise` | No Rekor v1 metadata on the entry, whatever its value |
+| `requireSingleTimestamp` | Exactly one RFC 3161 timestamp |
+| `checkpointOriginBinding` | Checkpoint origin and log signature line name must be the host of the entry's log `baseUrl`; entries naming an unknown log fail |
+
+`maxBundleBytes` (default 16 MiB) bounds bundles passed as text or bytes before they are parsed.
+On runtimes without WebCrypto Ed25519 (Safari before 17), call `installEd25519Fallback()` from
+`@freedomofpress/crypto-browser/noble` first, as for the certificate flow.
+
+`test/vectors/managed-key` holds real Cosign P-384 and P-256 bundles and single-mutation negatives,
+shared with sigstore-rust, with the expected outcome and reason code of each.
+
 ## Development
 
 ```bash
@@ -97,6 +157,14 @@ npm run build
 
 # Run tests (browser environment via Playwright)
 npm test
+
+# The same tests in Chromium, Firefox and WebKit, and in Node
+npm run test:browsers
+npm run test:node
+
+# Managed-key corpus and conformance vectors on the built library in Node
+# (also: bun test/runtime-matrix.ts); the second run uses the Ed25519 fallback
+npm run test:runtime
 
 # Lint and format
 npm run lint
