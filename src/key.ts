@@ -112,7 +112,7 @@ export class ManagedPublicKey {
   }
 
   /** Curve and digest named by Rekor key details, if they are ones this verifier understands. */
-  static keyDetails(keyDetails: unknown): CurveInfo | undefined {
+  static curveForKeyDetails(keyDetails: unknown): CurveInfo | undefined {
     return typeof keyDetails === "string" && Object.prototype.hasOwnProperty.call(KEY_DETAILS, keyDetails) ? KEY_DETAILS[keyDetails] : undefined;
   }
 

@@ -42,10 +42,21 @@ export interface Corpus {
 const read = (file: string) => readFileSync(file, "utf8");
 const readB64 = (file: string) => readFileSync(file).toString("base64");
 
+// The fields of a manifest.json vector that the checks use; file fields are paths relative to it.
+interface ManifestVector {
+  id: string;
+  category: string;
+  parent: string | null;
+  bundle: string;
+  key: string;
+  artifact: string;
+  trusted_root: string;
+  expected: ManagedKeyVector["expected"];
+}
+
 export function loadManagedKeyCorpus(dir = path.join(VECTORS_DIR, "managed-key")): ManagedKeyVector[] {
-  const manifest = JSON.parse(read(path.join(dir, "manifest.json")));
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return manifest.vectors.map((v: any) => ({
+  const manifest: { vectors: ManifestVector[] } = JSON.parse(read(path.join(dir, "manifest.json")));
+  return manifest.vectors.map((v) => ({
     id: v.id,
     category: v.category,
     parent: v.parent,

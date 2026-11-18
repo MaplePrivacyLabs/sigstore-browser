@@ -1,3 +1,7 @@
+# Fork CI: lint, the Node suite and runtime matrix on Node 26 and 24, Bun, and the three browsers,
+# for source branches and prebuilt releases alike. On a release ref it also rebuilds and compares
+# the committed release (scripts/check-release.mjs). ci.yml is upstream's Chromium-only job, kept
+# so that it keeps working on release refs.
 name: Build and test
 on: [push, pull_request, workflow_dispatch]
 permissions:

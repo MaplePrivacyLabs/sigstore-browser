@@ -77,7 +77,7 @@ export class ManagedPublicKey {
         return new ManagedPublicKey(der, curve);
     }
     /** Curve and digest named by Rekor key details, if they are ones this verifier understands. */
-    static keyDetails(keyDetails) {
+    static curveForKeyDetails(keyDetails) {
         return typeof keyDetails === "string" && Object.prototype.hasOwnProperty.call(KEY_DETAILS, keyDetails) ? KEY_DETAILS[keyDetails] : undefined;
     }
     /** Curve of an encoded SubjectPublicKeyInfo, if it is an ECDSA key on a supported curve. */

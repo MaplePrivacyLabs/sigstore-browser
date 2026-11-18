@@ -47,7 +47,6 @@ export const STRICT_MANAGED_KEY_PROFILE = Object.freeze({
     requireSingleTimestamp: true,
     checkpointOriginBinding: true,
 });
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 const present = (o, key) => isObj(o) && o[key] !== undefined;
 // Runs one verification step; an error that carries no reason code gets `code`.
@@ -61,9 +60,62 @@ async function step(code, fn) {
         fail(code, e instanceof Error ? e.message : String(e));
     }
 }
-function utf8Length(text, limit) {
-    // Each UTF-16 unit encodes to at most three bytes.
-    return text.length > limit || text.length * 3 <= limit ? text.length : new TextEncoder().encode(text).length;
+// Whether `text` is longer than `limit` bytes as UTF-8. Each UTF-16 code unit encodes to between one
+// and three bytes, so the text is only encoded when its length alone does not decide.
+function exceedsUtf8Bytes(text, limit) {
+    if (text.length > limit)
+        return true;
+    if (text.length * 3 <= limit)
+        return false;
+    return new TextEncoder().encode(text).length > limit;
+}
+// A trusted root log, or undefined when it has no usable log ID. A log whose key or validity period
+// cannot be loaded is kept with the error, so that only its own entries fail.
+async function loadTrustedLog(log) {
+    let logId;
+    try {
+        if (!isObj(log) || typeof log.logId?.keyId !== "string")
+            return undefined;
+        logId = base64ToUint8Array(log.logId.keyId);
+    }
+    catch {
+        return undefined;
+    }
+    try {
+        const { keyDetails, rawBytes } = log.publicKey ?? {};
+        if (typeof keyDetails !== "string" || typeof rawBytes !== "string")
+            throw new Error("missing public key");
+        return {
+            logId,
+            baseUrl: log.baseUrl,
+            key: {
+                publicKey: await importKey(keyDetails, keyDetails, rawBytes),
+                logId,
+                hashAlgorithm: typeof log.hashAlgorithm === "string" ? log.hashAlgorithm : "",
+                operator: typeof log.operator === "string" ? log.operator : "",
+                validFor: parseValidityPeriod(log.publicKey.validFor),
+            },
+        };
+    }
+    catch (e) {
+        return { logId, baseUrl: log.baseUrl, error: e instanceof Error ? e.message : String(e) };
+    }
+}
+// A timestamp authority with a valid validity period and a parseable, non-empty certificate chain.
+function isLoadableAuthority(ca) {
+    try {
+        if (!isObj(ca))
+            return false;
+        parseValidityPeriod(ca.validFor);
+        const certs = ca.certChain?.certificates;
+        if (!Array.isArray(certs) || certs.length === 0)
+            return false;
+        certs.forEach((c) => X509Certificate.parse(base64ToUint8Array(c.rawBytes)));
+        return true;
+    }
+    catch {
+        return false;
+    }
 }
 // The origin a Rekor v2 log signs checkpoints under: the host of its base URL, as sigstore-go derives it.
 function logOrigin(baseUrl) {
@@ -78,6 +130,34 @@ function logOrigin(baseUrl) {
     }
     catch {
         return undefined;
+    }
+}
+// verifyBundle has already required an envelope for "dsse" content; this narrows the type.
+function dsseEnvelope(bundle) {
+    if (!bundle.dsseEnvelope)
+        fail("content-unsupported", "Bundle does not contain a DSSE envelope");
+    return bundle.dsseEnvelope;
+}
+// At most one variant of each oneof: the content, and the verification material.
+function checkSingleVariants(bundle) {
+    const material = bundle.verificationMaterial;
+    if (["messageSignature", "dsseEnvelope"].filter((k) => present(bundle, k)).length > 1 ||
+        ["publicKey", "certificate", "x509CertificateChain"].filter((k) => present(material, k)).length > 1) {
+        fail("conflicting-oneof", "Bundle has more than one variant of its content or verification material");
+    }
+}
+// publicKey verification material, and content of the kind the caller verifies.
+function checkManagedKeyContent(bundle, content) {
+    const material = bundle.verificationMaterial;
+    if (!isObj(material) || !isObj(material.publicKey)) {
+        fail("verification-material-unsupported", "Managed-key verification needs a bundle with publicKey verification material");
+    }
+    const env = bundle.dsseEnvelope;
+    const dsse = isObj(env) && Array.isArray(env.signatures) && env.signatures.length === 1;
+    if (!(dsse || (content === "artifact" && isObj(bundle.messageSignature)))) {
+        fail("content-unsupported", content === "dsse"
+            ? "Bundle must contain a DSSE envelope with exactly one signature"
+            : "Bundle must contain a messageSignature or a DSSE envelope with exactly one signature");
     }
 }
 function isRekorV2Entry(entry) {
@@ -115,52 +195,9 @@ export class ManagedKeyVerifier {
         if (!isObj(root))
             throw new Error("Trusted root must be an object");
         const tlogs = Array.isArray(root.tlogs) ? root.tlogs : [];
-        const logs = await Promise.all(tlogs.map(async (log) => {
-            let logId;
-            try {
-                if (!isObj(log) || typeof log.logId?.keyId !== "string")
-                    return undefined;
-                logId = base64ToUint8Array(log.logId.keyId);
-            }
-            catch {
-                return undefined;
-            }
-            try {
-                const { keyDetails, rawBytes } = log.publicKey ?? {};
-                if (typeof keyDetails !== "string" || typeof rawBytes !== "string")
-                    throw new Error("missing public key");
-                return {
-                    logId,
-                    baseUrl: log.baseUrl,
-                    key: {
-                        publicKey: await importKey(keyDetails, keyDetails, rawBytes),
-                        logId,
-                        hashAlgorithm: typeof log.hashAlgorithm === "string" ? log.hashAlgorithm : "",
-                        operator: typeof log.operator === "string" ? log.operator : "",
-                        validFor: parseValidityPeriod(log.publicKey.validFor),
-                    },
-                };
-            }
-            catch (e) {
-                return { logId, baseUrl: log.baseUrl, error: e instanceof Error ? e.message : String(e) };
-            }
-        }));
+        const logs = await Promise.all(tlogs.map(loadTrustedLog));
         const authorities = Array.isArray(root.timestampAuthorities) ? root.timestampAuthorities : [];
-        this.timestampAuthorities = authorities.filter((ca) => {
-            try {
-                if (!isObj(ca))
-                    return false;
-                parseValidityPeriod(ca.validFor);
-                const certs = ca.certChain?.certificates;
-                if (!Array.isArray(certs) || certs.length === 0)
-                    return false;
-                certs.forEach((c) => X509Certificate.parse(base64ToUint8Array(c.rawBytes)));
-                return true;
-            }
-            catch {
-                return false;
-            }
-        });
+        this.timestampAuthorities = authorities.filter(isLoadableAuthority);
         this.logs = logs.filter((l) => l !== undefined);
     }
     /** Loads the trusted root through TUF (Sigstore's production repository by default). */
@@ -170,26 +207,20 @@ export class ManagedKeyVerifier {
     }
     /**
      * Verifies a DSSE bundle signed with `publicKey` and returns its payload. The caller checks the
-     * payload (for example the in-toto statement's subject and predicate). Throws a VerificationError
-     * whose `code` is one of REASON_CODES.
+     * payload (for example the in-toto statement's subject and predicate). A bundle or key that fails
+     * verification throws a VerificationError whose `code` is one of REASON_CODES; calling it before a
+     * trusted root is loaded, or with a parsed bundle under rejectDuplicateKeys, throws other errors.
      *
      * @param publicKey PEM "PUBLIC KEY" or DER SubjectPublicKeyInfo of an ECDSA P-256 or P-384 key.
      */
     async verifyDsse(bundle, publicKey) {
         const key = ManagedPublicKey.from(publicKey);
-        let env;
-        const { timestamps } = await this.verifyBundle(bundle, key, "dsse", async (parsed) => {
-            env = parsed.dsseEnvelope;
-            if (!env)
-                fail("content-unsupported", "Bundle does not contain a DSSE envelope");
-            await this.verifyDsseSignature(env, key);
-        });
-        if (!env)
-            fail("content-unsupported", "Bundle does not contain a DSSE envelope");
+        const verified = await this.verifyBundle(bundle, key, "dsse", (parsed) => this.verifyDsseSignature(dsseEnvelope(parsed), key));
+        const env = dsseEnvelope(verified.bundle);
         return {
             payloadType: env.payloadType,
             payload: base64ToUint8Array(env.payload),
-            timestamps,
+            timestamps: verified.timestamps,
         };
     }
     /**
@@ -246,11 +277,11 @@ export class ManagedKeyVerifier {
         }
         const sig = base64ToUint8Array(signature);
         const cryptoKey = await key.publicKey;
+        const { verifyDigest } = this.options;
         let verified;
         if (isDigestOnly) {
-            if (!this.options.verifyDigest)
+            if (!verifyDigest)
                 throw new Error("Digest-only verification needs the verifyDigest option");
-            const verifyDigest = this.options.verifyDigest;
             verified = await step("message-signature-invalid", () => verifyDigest(cryptoKey, data, sig));
         }
         else {
@@ -259,24 +290,42 @@ export class ManagedKeyVerifier {
         if (!verified)
             fail("message-signature-invalid", "Artifact signature verification failed");
     }
-    // Parses and checks the bundle in the order of the strict profile, so that the first failure (and
-    // its reason code) does not depend on the implementation: structure and profile rules, then the
-    // signature (`verifyContent`), the log entries and the timestamps.
+    // Checks the bundle in the order of the strict profile, so that the first failure (and its reason
+    // code) does not depend on the implementation: input, variants and profile rules, structure, then
+    // the signature (`verifyContent`), the log entries and the timestamps.
     async verifyBundle(input, key, content, verifyContent) {
         const logs = this.logs;
         if (!logs)
             throw new Error("Trusted root is not loaded");
-        const opts = this.options;
-        // Input bound and JSON.
+        const parsed = await this.parseBundle(input);
+        checkSingleVariants(parsed);
+        const version = this.bundleVersion(parsed.mediaType);
+        checkManagedKeyContent(parsed, content);
+        this.checkProfileLimits(parsed.verificationMaterial);
+        // Full structural validation, as for certificate bundles.
+        await step("bundle-malformed", () => assertBundle(parsed, "publicKey"));
+        const bundle = parsed;
+        await verifyContent(bundle);
+        const integratedTimes = await this.verifyTlogEntries(bundle, key, logs, version !== "0.1");
+        const timestamps = await this.verifyTimestamps(bundle);
+        if (integratedTimes.length + timestamps.length === 0) {
+            fail("timestamp-count", "No verified observer timestamp anchors the signature in time.");
+        }
+        return { bundle, timestamps };
+    }
+    // Bounds the input, rejects repeated member names when configured to, and parses it.
+    async parseBundle(input) {
         let parsed;
         if (typeof input === "string" || input instanceof Uint8Array) {
-            const size = typeof input === "string" ? utf8Length(input, this.maxBundleBytes) : input.byteLength;
-            if (size > this.maxBundleBytes)
+            const tooLarge = typeof input === "string"
+                ? exceedsUtf8Bytes(input, this.maxBundleBytes)
+                : input.byteLength > this.maxBundleBytes;
+            if (tooLarge)
                 fail("bundle-too-large", `Bundle is larger than ${this.maxBundleBytes} bytes`);
             const text = typeof input === "string"
                 ? input
                 : await step("bundle-malformed", () => new TextDecoder("utf-8", { fatal: true }).decode(input));
-            if (opts.rejectDuplicateKeys) {
+            if (this.options.rejectDuplicateKeys) {
                 const duplicate = await step("bundle-malformed", () => findDuplicateKey(text));
                 if (duplicate !== undefined)
                     fail("duplicate-json-key", `Bundle JSON repeats the member ${duplicate}`);
@@ -284,41 +333,33 @@ export class ManagedKeyVerifier {
             parsed = await step("bundle-malformed", () => JSON.parse(text));
         }
         else {
-            if (opts.rejectDuplicateKeys) {
+            if (this.options.rejectDuplicateKeys) {
                 throw new TypeError("rejectDuplicateKeys needs the bundle as JSON text or bytes");
             }
             parsed = input;
         }
         if (!isObj(parsed))
             fail("bundle-malformed", "Bundle is not a JSON object");
-        const vm = parsed.verificationMaterial;
-        // One variant per oneof: content, and verification material.
-        if (["messageSignature", "dsseEnvelope"].filter((k) => present(parsed, k)).length > 1 ||
-            ["publicKey", "certificate", "x509CertificateChain"].filter((k) => present(vm, k)).length > 1) {
-            fail("conflicting-oneof", "Bundle has more than one variant of its content or verification material");
-        }
+        return parsed;
+    }
+    // The bundle version named by an enabled media type, in the canonical spelling if that is required.
+    bundleVersion(mediaType) {
         let version;
         try {
-            version = getBundleVersion(typeof parsed.mediaType === "string" ? parsed.mediaType : "", this.bundleVersions);
+            version = getBundleVersion(typeof mediaType === "string" ? mediaType : "", this.bundleVersions);
         }
         catch {
-            fail("media-type-unsupported", `Unsupported bundle media type: ${String(parsed.mediaType)}`);
+            fail("media-type-unsupported", `Unsupported bundle media type: ${String(mediaType)}`);
         }
-        if (opts.requireCanonicalMediaType && parsed.mediaType !== `application/vnd.dev.sigstore.bundle.v${version}+json`) {
+        if (this.options.requireCanonicalMediaType && mediaType !== `application/vnd.dev.sigstore.bundle.v${version}+json`) {
             fail("media-type-unsupported", `Bundle media type must be spelled application/vnd.dev.sigstore.bundle.v${version}+json`);
         }
-        if (!isObj(vm) || !isObj(vm.publicKey)) {
-            fail("verification-material-unsupported", "Managed-key verification needs a bundle with publicKey verification material");
-        }
-        const env = parsed.dsseEnvelope;
-        const dsse = isObj(env) && Array.isArray(env.signatures) && env.signatures.length === 1;
-        if (!(dsse || (content === "artifact" && isObj(parsed.messageSignature)))) {
-            fail("content-unsupported", content === "dsse"
-                ? "Bundle must contain a DSSE envelope with exactly one signature"
-                : "Bundle must contain a messageSignature or a DSSE envelope with exactly one signature");
-        }
-        // Transparency log entry and timestamp counts, kinds and Rekor v1 metadata.
-        const entries = Array.isArray(vm.tlogEntries) ? vm.tlogEntries : [];
+        return version;
+    }
+    // Transparency log entry and timestamp counts, entry kinds and Rekor v1 metadata.
+    checkProfileLimits(material) {
+        const opts = this.options;
+        const entries = Array.isArray(material.tlogEntries) ? material.tlogEntries : [];
         if (opts.requireSingleTlogEntry && entries.length !== 1) {
             fail("tlog-entry-count", `Exactly one transparency log entry is required, found ${entries.length}`);
         }
@@ -335,26 +376,22 @@ export class ManagedKeyVerifier {
             }
         }
         if (opts.requireSingleTimestamp) {
-            const timestamps = isObj(vm.timestampVerificationData) ? vm.timestampVerificationData.rfc3161Timestamps : undefined;
+            const data = material.timestampVerificationData;
+            const timestamps = isObj(data) ? data.rfc3161Timestamps : undefined;
             if (!Array.isArray(timestamps) || timestamps.length !== 1) {
                 fail("timestamp-count", "Exactly one RFC 3161 timestamp is required");
             }
         }
-        // Full structural validation, as for certificate bundles.
-        await step("bundle-malformed", () => assertBundle(parsed, "publicKey"));
-        const bundle = parsed;
-        await verifyContent(bundle);
-        const integratedTimes = await this.verifyTlogEntries(bundle, key, logs, version !== "0.1");
+    }
+    // Verifies every RFC 3161 timestamp over the bundle signature and returns their times.
+    async verifyTimestamps(bundle) {
         const signature = base64ToUint8Array(bundle.dsseEnvelope ? bundle.dsseEnvelope.signatures[0].sig : bundle.messageSignature.signature);
         const verified = await verifyBundleTimestampForSignature(bundle.verificationMaterial.timestampVerificationData, signature, this.timestampAuthorities);
         const tsaOperators = countOperators(new Set(verified.map((t) => t.operator)));
         if (tsaOperators < this.tsaThreshold) {
             fail("timestamp-threshold", `Not enough verified TSA operators: ${tsaOperators} < ${this.tsaThreshold}`);
         }
-        if (integratedTimes.length + verified.length === 0) {
-            fail("timestamp-count", "No verified observer timestamp anchors the signature in time.");
-        }
-        return { bundle, timestamps: verified.map((t) => t.signingTime) };
+        return verified.map((t) => t.signingTime);
     }
     // Verifies every entry from a trusted log and returns the integrated times bound by verified SETs.
     async verifyTlogEntries(bundle, key, logs, requireProof) {

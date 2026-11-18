@@ -65,7 +65,7 @@ export function assertLoggedV2Verifier(signer, verifier) {
         fail("tlog-key-mismatch", "TLog entry does not record a public key");
     }
     const logged = base64ToUint8Array(rawBytes);
-    const details = ManagedPublicKey.keyDetails(verifier?.keyDetails);
+    const details = ManagedPublicKey.curveForKeyDetails(verifier?.keyDetails);
     const curve = ManagedPublicKey.curveOf(logged);
     if (!details || details.namedCurve !== curve) {
         fail("tlog-key-details-mismatch", `key details ${String(verifier?.keyDetails)} do not match the logged ${curve ?? "unsupported"} key`);

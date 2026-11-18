@@ -21,7 +21,7 @@ export declare class ManagedPublicKey {
      */
     static from(key: string | Uint8Array): ManagedPublicKey;
     /** Curve and digest named by Rekor key details, if they are ones this verifier understands. */
-    static keyDetails(keyDetails: unknown): CurveInfo | undefined;
+    static curveForKeyDetails(keyDetails: unknown): CurveInfo | undefined;
     /** Curve of an encoded SubjectPublicKeyInfo, if it is an ECDSA key on a supported curve. */
     static curveOf(spki: Uint8Array): string | undefined;
     /** True if `spki` is byte-for-byte this key's SubjectPublicKeyInfo. */

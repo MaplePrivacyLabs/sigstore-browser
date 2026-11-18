@@ -37,7 +37,6 @@ export declare class SigstoreVerifier {
      */
     loadSigstoreRootWithTUF(tufProvider?: TrustedRootProvider): Promise<void>;
     verifySCT(cert: X509Certificate, issuer: X509Certificate, ctlogs: CTLog[]): Promise<Set<string>>;
-    private verifySET;
     private verifyTlogEntries;
     private verifyBundle;
     verifyArtifactPolicy(policy: VerificationPolicy, bundle: SigstoreBundle, data: Uint8Array, isDigestOnly?: boolean): Promise<boolean>;

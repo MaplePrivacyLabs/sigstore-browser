@@ -8,30 +8,16 @@
 // Exits non-zero on any mismatch.
 import { checkConformance, checkManagedKeyCorpus, type Lib, type Mismatch } from "./corpus/check.ts";
 import { loadCorpus } from "./corpus/data.ts";
+import { withoutEd25519 } from "./no-ed25519.ts";
 
-const runtime = typeof (globalThis as { Bun?: { version: string } }).Bun !== "undefined"
-  ? `bun ${(globalThis as unknown as { Bun: { version: string } }).Bun.version}`
-  : `node ${process.versions.node}`;
+const bun = (globalThis as { Bun?: { version: string } }).Bun;
+const runtime = bun ? `bun ${bun.version}` : `node ${process.versions.node}`;
 
 const noble = await import("@freedomofpress/crypto-browser/noble");
 const cryptoBrowser = await import("@freedomofpress/crypto-browser");
 let ed25519 = "native";
 if (process.env.NO_NATIVE_ED25519) {
-  // A SubtleCrypto that rejects Ed25519 like engines without it.
-  const real = globalThis.crypto.subtle;
-  const noEd25519 = new Proxy(real, {
-    get(target, prop) {
-      const value = Reflect.get(target, prop) as unknown;
-      if (typeof value !== "function") return value;
-      return (...args: unknown[]) => {
-        const alg = (prop === "importKey" ? args[2] : args[0]) as { name?: string } | string | undefined;
-        if ((typeof alg === "string" ? alg : alg?.name) === "Ed25519") {
-          return Promise.reject(new DOMException("Unrecognized name.", "NotSupportedError"));
-        }
-        return (value as (...a: unknown[]) => unknown).apply(target, args);
-      };
-    },
-  });
+  const noEd25519 = withoutEd25519(globalThis.crypto.subtle);
   // Install it globally where the runtime allows (Node); Bun's crypto.subtle cannot be replaced.
   try {
     Object.defineProperty(globalThis.crypto, "subtle", { value: noEd25519, configurable: true });
@@ -45,7 +31,10 @@ if (process.env.NO_NATIVE_ED25519) {
   if ((probe as unknown as { __fallback__?: boolean }).__fallback__ !== true) {
     throw new Error("Ed25519 keys are still native; the fallback would not run");
   }
-  const direct = await noEd25519.importKey("raw", new Uint8Array(32), { name: "Ed25519" }, true, ["verify"]).then(() => "native", () => "rejected");
+  const direct = await noEd25519.importKey("raw", new Uint8Array(32), { name: "Ed25519" }, true, ["verify"]).then(
+    () => "native",
+    () => "rejected",
+  );
   ed25519 = `@noble/curves fallback (native Ed25519 ${direct})`;
 }
 

@@ -1,6 +1,6 @@
 import { base64ToUint8Array, ByteStream, importKey, sha256, uint8ArrayEqual, Uint8ArrayToHex, Uint8ArrayToString, verifySignature } from "@freedomofpress/crypto-browser";
 
-import { assertBundle, SigstoreBundle, TLogEntry } from "./bundle.js";
+import { assertBundle, SigstoreBundle } from "./bundle.js";
 import { preAuthEncoding } from "./dsse.js";
 import {
   CertAuthority,
@@ -306,11 +306,6 @@ export class SigstoreVerifier {
     return operators;
   }
 
-  // Verifies the signed entry timestamp and returns the integrated time it binds.
-  private async verifySET(entry: TLogEntry, promise: string, log: RekorKeyInfo): Promise<Date> {
-    return verifyInclusionPromise(entry, promise, log);
-  }
-
   // Fully verifies every entry from a trusted log and returns the SET-bound integrated times.
   // Entries from unknown logs are ignored; the threshold counts distinct log operators that verified.
   private async verifyTlogEntries(
@@ -334,7 +329,7 @@ export class SigstoreVerifier {
         throw new Error("Transparency log entry requires an inclusion proof.");
       }
       if (promise) {
-        integratedTimes.push(await this.verifySET(entry, promise, log));
+        integratedTimes.push(await verifyInclusionPromise(entry, promise, log));
       }
       if (entry.inclusionProof) {
         await verifyMerkleInclusion(entry);

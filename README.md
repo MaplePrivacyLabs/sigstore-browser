@@ -131,7 +131,10 @@ options; to require a DSSE envelope, call `verifyDsse`.
 
 The key you pass is the only key used. A bundle's `publicKey.hint` never selects or installs a
 key, there is no certificate or identity fallback, and a bundle carrying a certificate is
-rejected. Every failure is a `VerificationError` whose `code` is one of `REASON_CODES`.
+rejected. A bundle or key that fails verification raises a `VerificationError` whose `code` is one
+of `REASON_CODES`. Misuse raises ordinary errors instead: invalid constructor options, verifying
+before a trusted root is loaded, a digest that is not 32 bytes, a digest-only `messageSignature` without
+`verifyDigest`, and a parsed bundle object while `rejectDuplicateKeys` is set.
 
 By default the checks match the certificate flow: bundle v0.2 and v0.3; every entry from a trusted
 log fully verified (inclusion proof, checkpoint signed by that entry's log key with witness
@@ -141,10 +144,11 @@ certificates embedded in the token; at least one verified observer time. For a R
 logged key details, digest algorithm and digest length must agree with the key.
 
 Loading the trusted root is per key: a log key or timestamp authority that this runtime cannot
-load (an unsupported or malformed key, Ed25519 without native support or the fallback) or that has
-been retired only affects entries that need it. Fulcio CAs and CT logs are not used.
+load (an unsupported or malformed key or validity period, Ed25519 without native support or the
+fallback) only affects entries that need it. Fulcio CAs and CT logs are not used.
 
-Stricter options, all off by default and all on in `STRICT_MANAGED_KEY_PROFILE`:
+Stricter options. None applies by default; `STRICT_MANAGED_KEY_PROFILE` enables each switch and
+sets each list to the value shown:
 
 | Option | Effect |
 | --- | --- |

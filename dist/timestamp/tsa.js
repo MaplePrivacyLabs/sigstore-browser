@@ -158,46 +158,9 @@ export async function verifyBundleTimestampForSignature(timestampData, signature
     assertTimestampVerificationData(timestampData);
     const verified = [];
     for (const tsData of timestampData?.rfc3161Timestamps ?? []) {
-        let timestamp;
-        let signerSerialNumber;
-        let signerIssuer;
-        let signingTime;
-        try {
-            timestamp = RFC3161Timestamp.parse(base64ToUint8Array(tsData.signedTimestamp));
-            signerSerialNumber = timestamp.signerSerialNumber;
-            signerIssuer = timestamp.signerIssuer;
-            signingTime = timestamp.signingTime;
-        }
-        catch (e) {
-            fail("timestamp-malformed", `Malformed RFC 3161 timestamp: ${e instanceof Error ? e.message : String(e)}`);
-        }
+        const { timestamp, signerSerialNumber, signerIssuer, signingTime } = parseTimestamp(tsData.signedTimestamp);
         const candidates = filterCAsBySerialAndIssuer(filterCertAuthorities(timestampAuthorities, signingTime), { serialNumber: signerSerialNumber, issuer: signerIssuer });
-        // The failure from an authority whose chain verified says more than an untrusted chain.
-        let failure;
-        let authority;
-        for (const ca of candidates) {
-            let publicKey;
-            try {
-                publicKey = await verifiedAuthorityKey(ca, signingTime);
-            }
-            catch (e) {
-                failure ?? (failure = new VerificationError("timestamp-untrusted-authority", e instanceof Error ? e.message : String(e)));
-                continue;
-            }
-            try {
-                await timestamp.verify(signature, publicKey);
-                authority = ca;
-                break;
-            }
-            catch (e) {
-                failure = e instanceof RFC3161TimestampVerificationError
-                    ? new VerificationError(e.code, `RFC 3161 timestamp: ${e.message}`)
-                    : new VerificationError("timestamp-malformed", `RFC 3161 timestamp: ${e instanceof Error ? e.message : String(e)}`);
-            }
-        }
-        if (!authority) {
-            throw failure ?? new VerificationError("timestamp-untrusted-authority", "RFC 3161 timestamp was not issued by a timestamp authority in the trusted root");
-        }
+        const authority = await findIssuingAuthority(timestamp, signature, candidates, signingTime);
         const serial = Array.from(signerSerialNumber).join(",");
         if (verified.some((v) => v.signingTime.getTime() === signingTime.getTime() && v.signerSerialNumber === serial)) {
             fail("timestamp-duplicate", "Duplicate TSA timestamp detected");
@@ -205,6 +168,46 @@ export async function verifyBundleTimestampForSignature(timestampData, signature
         verified.push({ signingTime, operator: authority.operator || "", signerSerialNumber: serial });
     }
     return verified.map(({ signingTime, operator }) => ({ signingTime, operator }));
+}
+function parseTimestamp(signedTimestamp) {
+    try {
+        const timestamp = RFC3161Timestamp.parse(base64ToUint8Array(signedTimestamp));
+        return {
+            timestamp,
+            signerSerialNumber: timestamp.signerSerialNumber,
+            signerIssuer: timestamp.signerIssuer,
+            signingTime: timestamp.signingTime,
+        };
+    }
+    catch (e) {
+        fail("timestamp-malformed", `Malformed RFC 3161 timestamp: ${e instanceof Error ? e.message : String(e)}`);
+    }
+}
+// The first candidate authority whose chain verifies and whose key verifies the timestamp over
+// `signature`. Otherwise throws the most informative failure: one from an authority whose chain
+// verified says more than an untrusted chain.
+async function findIssuingAuthority(timestamp, signature, candidates, signingTime) {
+    let failure;
+    for (const ca of candidates) {
+        let publicKey;
+        try {
+            publicKey = await verifiedAuthorityKey(ca, signingTime);
+        }
+        catch (e) {
+            failure ?? (failure = new VerificationError("timestamp-untrusted-authority", e instanceof Error ? e.message : String(e)));
+            continue;
+        }
+        try {
+            await timestamp.verify(signature, publicKey);
+            return ca;
+        }
+        catch (e) {
+            failure = e instanceof RFC3161TimestampVerificationError
+                ? new VerificationError(e.code, `RFC 3161 timestamp: ${e.message}`)
+                : new VerificationError("timestamp-malformed", `RFC 3161 timestamp: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+    throw failure ?? new VerificationError("timestamp-untrusted-authority", "RFC 3161 timestamp was not issued by a timestamp authority in the trusted root");
 }
 // The authority's signing key, once its certificate chain from the trusted root verifies at `signingTime`.
 async function verifiedAuthorityKey(ca, signingTime) {
