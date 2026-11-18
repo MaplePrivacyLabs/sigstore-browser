@@ -30,8 +30,14 @@ const CONFIGURATIONS: [Mode, How][] = [
 ];
 
 describe("managed-key corpus", () => {
-  it("is the full corpus, and every reason code it records is one this library reports", () => {
+  const rejected = corpus.managedKey.filter((v) => v.expected.profile.result === "reject").length;
+  const accepted = corpus.managedKey.length - rejected;
+
+  it("has all 44 vectors", () => {
     expect(corpus.managedKey).toHaveLength(44);
+  });
+
+  it("records only reason codes this library reports", () => {
     for (const v of corpus.managedKey) {
       for (const expected of Object.values(v.expected)) {
         if (expected.result === "reject") expect(lib.REASON_CODES).toContain(expected.code);
@@ -39,16 +45,15 @@ describe("managed-key corpus", () => {
     }
   });
 
-  it("catches a verifier that accepts everything, or rejects for another reason", async () => {
-    const rejected = corpus.managedKey.filter((v) => v.expected.profile.result === "reject").length;
-    const accepted = corpus.managedKey.length - rejected;
+  it("catches a verifier that accepts everything", async () => {
+    const mismatches = await checkManagedKeyCorpus(withVerifier(AcceptAll), corpus.managedKey, "strict", "dsse");
+    expect(mismatches).toHaveLength(rejected);
+  });
 
-    const acceptAll = await checkManagedKeyCorpus(withVerifier(AcceptAll), corpus.managedKey, "strict", "dsse");
-    expect(acceptAll).toHaveLength(rejected);
-
-    const wrong = await checkManagedKeyCorpus(withVerifier(WrongReason), corpus.managedKey, "strict", "dsse");
+  it("catches a verifier that rejects for another reason", async () => {
+    const mismatches = await checkManagedKeyCorpus(withVerifier(WrongReason), corpus.managedKey, "strict", "dsse");
     // Every vector, plus each negative whose parent is now rejected.
-    expect(wrong.length).toBeGreaterThanOrEqual(rejected + accepted);
+    expect(mismatches.length).toBeGreaterThanOrEqual(rejected + accepted);
   });
 
   it.each(CONFIGURATIONS)("%s configuration, %s", async (mode, how) => {
