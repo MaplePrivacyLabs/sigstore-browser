@@ -53,6 +53,6 @@
   },
   "dependencies": {
     "@freedomofpress/crypto-browser": "^0.3.0",
-    "@freedomofpress/tuf-browser": "git+https://github.com/MaplePrivacyLabs/tuf-browser.git#17cee1a631f8714d169e92521b4fab03244252d2"
+    "@freedomofpress/tuf-browser": "git+https://github.com/MaplePrivacyLabs/tuf-browser.git#ea4c01b781a9aa00da928e717d97441d05d2dc31"
   }
 }
