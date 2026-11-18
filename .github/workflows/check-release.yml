@@ -11,7 +11,10 @@ jobs:
         with:
           node-version: '26.13.1'
           cache: npm
+      - run: npm ci
+        if: hashFiles('release.json') == ''
       - run: npm ci --ignore-scripts
+        if: hashFiles('release.json') != ''
       - run: npm run build
         if: hashFiles('release.json') == ''
       - run: npx playwright install --with-deps chromium
