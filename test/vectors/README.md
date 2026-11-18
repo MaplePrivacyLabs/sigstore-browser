@@ -12,7 +12,7 @@
 ## The managed-key corpus
 
 The corpus is shared with a sigstore-rust fork, whose copy is the original: `managed-key/` was
-exported from that repository's `test-vectors/managed-key` at commit `99db1d6` and is kept
+exported from that repository's `test-vectors/managed-key` at commit `b46a60a` and is kept
 byte-identical to it, READMEs included. Paths in `managed-key/README.md` that name Rust files refer
 to that repository, and "this library" there means sigstore-rust. Do not edit the directory here;
 re-export it and compare with `diff -r`.
