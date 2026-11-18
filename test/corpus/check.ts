@@ -1,14 +1,10 @@
 // Runs the vendored vectors against the library and reports every outcome that differs from the
 // expected one. Runtime-agnostic (Node, Bun, browsers): it receives the library and the data.
+import type * as library from "../../src/index.ts";
 import type { ConformanceVector, Corpus, Expected, ManagedKeyVector } from "./data.ts";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-export interface Lib {
-  ManagedKeyVerifier: any;
-  STRICT_MANAGED_KEY_PROFILE: any;
-  SigstoreVerifier: any;
-}
-/* eslint-enable @typescript-eslint/no-explicit-any */
+/** The parts of the library the checks use: the source in tests, the built dist/ in runtime-matrix.ts. */
+export type Lib = Pick<typeof library, "ManagedKeyVerifier" | "STRICT_MANAGED_KEY_PROFILE" | "SigstoreVerifier">;
 
 export interface Outcome {
   result: "accept" | "reject";
