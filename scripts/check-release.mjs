@@ -1,6 +1,6 @@
 // Verify release metadata before rebuilding the recorded source revision.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -19,9 +19,13 @@ const source = (file) => JSON.parse(execFileSync('git', ['show', `${release.sour
 const expected = source('package.json');
 const expectedLock = source('package-lock.json');
 delete expected.scripts.prepare;
+let tufSource;
 if (expected.name === '@freedomofpress/sigstore-browser') {
   if (!sha.test(release.tufRelease)) throw new Error('Expected a full TUF release commit');
   const dependency = '@freedomofpress/tuf-browser';
+  const pinned = /^git\+(https:\/\/[^#]+\.git)#([a-f0-9]{40})$/.exec(expected.dependencies[dependency]);
+  if (!pinned) throw new Error('Source must pin an exact TUF Git commit');
+  tufSource = { url: pinned[1], commit: pinned[2] };
   const spec = `git+https://github.com:443/MaplePrivacyLabs/tuf-browser.git#${release.tufRelease}`;
   expected.dependencies[dependency] = spec;
   expectedLock.packages[''].dependencies[dependency] = spec;
@@ -51,7 +55,39 @@ try {
   for (const file of ['package.json', 'package-lock.json']) {
     copyFileSync(join(root, file), join(scratch, file));
   }
+  if (tufSource) {
+    // The release pointer is not evidence of its contents: independently build
+    // the source dependency pinned by the recorded browser source revision.
+    const repository = join(scratch, 'tuf-repository');
+    mkdirSync(repository);
+    run('git', ['init', '--quiet'], repository);
+    run('git', ['fetch', '--quiet', '--no-tags', tufSource.url,
+      tufSource.commit, release.tufRelease], repository);
+    const provenance = JSON.parse(execFileSync('git',
+      ['show', `${release.tufRelease}:release.json`], { cwd: repository, encoding: 'utf8' }));
+    if (provenance.source !== tufSource.commit) {
+      throw new Error('TUF release source does not match the browser source dependency pin');
+    }
+    const extract = (revision, destination, paths = []) => {
+      mkdirSync(destination);
+      const tar = join(scratch, 'tuf.tar');
+      run('git', ['archive', '--output', tar, revision, ...paths], repository);
+      run('tar', ['-xf', tar, '-C', destination], repository);
+      rmSync(tar);
+    };
+    const sourceTree = join(scratch, 'tuf-source');
+    const releaseTree = join(scratch, 'tuf-release');
+    extract(tufSource.commit, sourceTree);
+    extract(release.tufRelease, releaseTree, ['dist']);
+    run('npm', ['ci', '--ignore-scripts'], sourceTree);
+    run('npm', ['run', 'build'], sourceTree);
+    run('diff', ['-r', join(sourceTree, 'dist'), join(releaseTree, 'dist')], root);
+  }
   run('npm', ['ci', '--ignore-scripts'], scratch);
+  if (tufSource) {
+    run('diff', ['-r', join(scratch, 'tuf-source', 'dist'),
+      join(scratch, 'node_modules', '@freedomofpress', 'tuf-browser', 'dist')], root);
+  }
   run('npm', ['run', 'build'], scratch);
   run('diff', ['-r', join(root, 'dist'), join(scratch, 'dist')], root);
 } finally {
