@@ -291,8 +291,9 @@ export class ManagedKeyVerifier {
 
   /**
    * Verifies a DSSE bundle signed with `publicKey` and returns its payload. The caller checks the
-   * payload (for example the in-toto statement's subject and predicate). Throws a VerificationError
-   * whose `code` is one of REASON_CODES.
+   * payload (for example the in-toto statement's subject and predicate). A bundle or key that fails
+   * verification throws a VerificationError whose `code` is one of REASON_CODES; calling it before a
+   * trusted root is loaded, or with a parsed bundle under rejectDuplicateKeys, throws other errors.
    *
    * @param publicKey PEM "PUBLIC KEY" or DER SubjectPublicKeyInfo of an ECDSA P-256 or P-384 key.
    */
