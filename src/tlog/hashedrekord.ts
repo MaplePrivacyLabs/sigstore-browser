@@ -113,11 +113,12 @@ async function verifyHashedRekordV002Body(
 
   // A managed key fixes the digest: its key details name the algorithm, which fixes the length.
   if (signer instanceof ManagedPublicKey) {
-    const details = ManagedPublicKey.keyDetails(spec.signature.verifier?.keyDetails);
+    const keyDetails = spec.signature.verifier?.keyDetails;
+    const details = ManagedPublicKey.curveForKeyDetails(keyDetails);
     if (spec.data?.algorithm !== details?.digestAlgorithm) {
       fail(
         "tlog-digest-algorithm-mismatch",
-        `digest algorithm ${String(spec.data?.algorithm)} does not match key details ${String(spec.signature.verifier?.keyDetails)}`,
+        `digest algorithm ${String(spec.data?.algorithm)} does not match key details ${String(keyDetails)}`,
       );
     }
     const length = base64ToUint8Array(spec.data.digest || "").length;
