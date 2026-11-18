@@ -11,17 +11,25 @@
 
 ## The managed-key corpus
 
-The corpus is shared with a sigstore-rust fork, whose copy is the original: `managed-key/` was
-exported from that repository's `test-vectors/managed-key` at commit `b46a60a` and is kept
-byte-identical to it, READMEs included. Paths in `managed-key/README.md` that name Rust files refer
-to that repository, and "this library" there means sigstore-rust. Do not edit the directory here;
-re-export it and compare with `diff -r`.
+`managed-key/` is copied byte for byte from `test-vectors/managed-key` in
+<https://github.com/MaplePrivacyLabs/sigstore-rust>, a sigstore-rust fork that holds the original,
+at commit `b46a60a32c856d6964f60c23cb78aedee532e2aa`. Paths in `managed-key/README.md` that name
+Rust files refer to that repository, and "this library" there means sigstore-rust. Do not edit the
+directory here. To compare it with its source and check that it regenerates (Python 3 and the
+OpenSSL 3.2+ command line):
+
+```sh
+git clone https://github.com/MaplePrivacyLabs/sigstore-rust
+git -C sigstore-rust checkout b46a60a32c856d6964f60c23cb78aedee532e2aa
+diff -r sigstore-rust/test-vectors/managed-key test/vectors/managed-key
+python3 test/vectors/managed-key/generate.py --check
+```
 
 Each vector in `manifest.json` records three expectations:
 
 - `profile` is the shared contract: the outcome and reason code under the strict profile of
   `PROFILE.md`. With `STRICT_MANAGED_KEY_PROFILE`, every vector must match it exactly.
-- `library` and `library_checkpoint_log_binding` are sigstore-rust's behaviour with its default
+- `library` and `library_checkpoint_log_binding` are sigstore-rust's behavior with its default
   options, without and with its checkpoint binding option. They are not requirements for this
   library.
 
