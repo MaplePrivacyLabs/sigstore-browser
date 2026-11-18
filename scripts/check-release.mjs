@@ -20,6 +20,7 @@ const expected = source('package.json');
 const expectedLock = source('package-lock.json');
 delete expected.scripts.prepare;
 let tufSource;
+let tufManifest;
 if (expected.name === '@freedomofpress/sigstore-browser') {
   if (!sha.test(release.tufRelease)) throw new Error('Expected a full TUF release commit');
   const dependency = '@freedomofpress/tuf-browser';
@@ -78,13 +79,30 @@ try {
     const sourceTree = join(scratch, 'tuf-source');
     const releaseTree = join(scratch, 'tuf-release');
     extract(tufSource.commit, sourceTree);
-    extract(release.tufRelease, releaseTree, ['dist']);
+    extract(release.tufRelease, releaseTree);
+    tufManifest = JSON.parse(readFileSync(join(sourceTree, 'package.json'), 'utf8'));
+    delete tufManifest.scripts.prepare;
+    const shippedManifest = JSON.parse(readFileSync(join(releaseTree, 'package.json'), 'utf8'));
+    if (!isDeepStrictEqual(shippedManifest, tufManifest)) {
+      throw new Error('TUF release manifest differs from its pinned source transformation');
+    }
+    const lock = (tree) => JSON.parse(readFileSync(join(tree, 'package-lock.json'), 'utf8'));
+    if (!isDeepStrictEqual(lock(sourceTree), lock(releaseTree))) {
+      throw new Error('TUF release lockfile differs from its pinned source');
+    }
+    run('git', ['diff', '--exit-code', tufSource.commit, release.tufRelease,
+      '--', '.', ':!dist', ':!package.json', ':!package-lock.json', ':!release.json'], repository);
     run('npm', ['ci', '--ignore-scripts'], sourceTree);
     run('npm', ['run', 'build'], sourceTree);
     run('diff', ['-r', join(sourceTree, 'dist'), join(releaseTree, 'dist')], root);
   }
   run('npm', ['ci', '--ignore-scripts'], scratch);
   if (tufSource) {
+    const installed = JSON.parse(readFileSync(join(scratch, 'node_modules',
+      '@freedomofpress', 'tuf-browser', 'package.json'), 'utf8'));
+    if (!isDeepStrictEqual(installed, tufManifest)) {
+      throw new Error('Installed TUF manifest differs from its pinned source transformation');
+    }
     run('diff', ['-r', join(scratch, 'tuf-source', 'dist'),
       join(scratch, 'node_modules', '@freedomofpress', 'tuf-browser', 'dist')], root);
   }
