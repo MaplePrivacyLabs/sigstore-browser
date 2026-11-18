@@ -4,7 +4,7 @@ import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble"
 
 import type * as library from "../../src/index.ts";
 import { base64ToBytes } from "../helpers.ts";
-import type { Corpus, Expected, ManagedKeyVector } from "./data.ts";
+import type { ConformanceVector, Corpus, Expected, ManagedKeyVector } from "./data.ts";
 
 /** The parts of the library the checks use: the source in tests, the built dist/ in runtime-matrix.ts. */
 export type Lib = Pick<typeof library, "ManagedKeyVerifier" | "STRICT_MANAGED_KEY_PROFILE" | "SigstoreVerifier">;
@@ -219,6 +219,44 @@ export async function checkManagedKeyCorpus(
         expected: { result: "accept" },
         actual,
       });
+    }
+  }
+  return mismatches;
+}
+
+/**
+ * sigstore-conformance bundle-verify vectors at the library level, from the artifact and from its
+ * SHA-256 digest, as the suite's harness does. key.pub selects ManagedKeyVerifier, otherwise the
+ * certificate flow (SigstoreVerifier) with the vector's identity and issuer. Like the suite's CLI
+ * entry point, every bundle version is enabled.
+ */
+export async function checkConformance(
+  lib: Lib,
+  vectors: ConformanceVector[],
+  verifyDigest: (key: CryptoKey, digest: Uint8Array, signature: Uint8Array) => Promise<boolean>,
+): Promise<Mismatch[]> {
+  const mismatches: Mismatch[] = [];
+  const bundleVersions = ["0.1", "0.2", "0.3"];
+  for (const v of vectors) {
+    for (const digestOnly of [false, true]) {
+      const artifact = base64ToBytes(v.artifact);
+      const data = digestOnly ? await sha256(artifact) : artifact;
+      const actual = await outcome(async () => {
+        if (v.key !== undefined) {
+          const verifier = new lib.ManagedKeyVerifier({ bundleVersions, verifyDigest });
+          const root = JSON.parse(v.root);
+  await verifier.loadTrustedRoot(root);
+          await verifier.verifyArtifact(v.bundle, v.key, data, digestOnly);
+        } else {
+          const verifier = new lib.SigstoreVerifier({ bundleVersions, verifyDigest });
+          await verifier.loadSigstoreRoot(JSON.parse(v.root));
+          await verifier.verifyArtifact(v.identity, v.issuer, JSON.parse(v.bundle), data, digestOnly);
+        }
+      });
+      const expected: Expected = v.shouldFail ? { result: "reject", code: "" } : { result: "accept" };
+      if (expected.result !== actual.result) {
+        mismatches.push({ id: v.id, how: digestOnly ? "digest" : "artifact", expected, actual });
+      }
     }
   }
   return mismatches;

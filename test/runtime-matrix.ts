@@ -6,7 +6,7 @@
 //   NO_NATIVE_ED25519=1 node test/runtime-matrix.ts   # Ed25519 through the @noble/curves fallback
 //
 // Exits non-zero on any mismatch.
-import { checkManagedKeyCorpus, type Lib, type Mismatch } from "./corpus/check.ts";
+import { checkConformance, checkManagedKeyCorpus, type Lib, type Mismatch } from "./corpus/check.ts";
 import { loadCorpus } from "./corpus/data.ts";
 import { withoutEd25519 } from "./no-ed25519.ts";
 
@@ -53,6 +53,11 @@ for (const mode of ["strict", "default"] as const) {
     mismatches.push(...found);
   }
 }
+const conformance = await checkConformance(lib, corpus.conformance, noble.verifySignatureOverDigest);
+const conformanceChecks = corpus.conformance.length * 2;
+const passedConformance = conformanceChecks - conformance.length;
+counts.push(`conformance (artifact+digest): ${passedConformance}/${conformanceChecks}`);
+mismatches.push(...conformance);
 
 console.log(`${runtime}, Ed25519 ${ed25519}`);
 for (const line of counts) console.log(`  ${line}`);

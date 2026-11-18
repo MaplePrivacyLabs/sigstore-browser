@@ -173,7 +173,7 @@ npm test
 npm run test:browsers
 npm run test:node
 
-# The managed-key corpus on the built library in Node
+# Managed-key corpus and conformance vectors on the built library in Node
 # (also: bun test/runtime-matrix.ts); the second run uses the Ed25519 fallback
 npm run test:runtime
 

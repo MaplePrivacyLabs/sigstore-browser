@@ -1,6 +1,7 @@
+import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble";
 import { describe, expect, inject, it } from "vitest";
 
-import { checkManagedKeyCorpus, expectedFor, type How, type Lib, type Mode } from "../test/corpus/check.ts";
+import { checkConformance, checkManagedKeyCorpus, expectedFor, type How, type Lib, type Mode } from "../test/corpus/check.ts";
 import * as lib from "./index.js";
 
 // The shared corpus stays unchanged. Browser exceptions, including JSON.parse handling of repeated
@@ -68,3 +69,9 @@ describe("managed-key corpus", () => {
   });
 });
 
+describe("sigstore-conformance v0.0.29 bundle-verify vectors", () => {
+  it("pass at the library level, from the artifact and from its digest", async () => {
+    expect(corpus.conformance).toHaveLength(67);
+    expect(await checkConformance(lib, corpus.conformance, verifySignatureOverDigest)).toEqual([]);
+  });
+});

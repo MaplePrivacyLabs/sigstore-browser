@@ -3,8 +3,9 @@
 | Directory | Contents |
 | --- | --- |
 | `managed-key/` | Managed-key DSSE and blob / Rekor v2 / RFC 3161 corpus: real Cosign v3.1.4 bundles and single-mutation negatives, with `manifest.json` (expected outcome and reason code per vector), `PROFILE.md` (the strict profile) and the generator |
+| `sigstore-conformance/` | `bundle-verify/` from sigstore-conformance v0.0.29, unmodified; its README says how it is run here |
 
-`test/corpus/data.ts` loads the corpus. `test/corpus/check.ts` runs them against the library in
+`test/corpus/data.ts` loads both. `test/corpus/check.ts` runs them against the library in
 `src/managed.corpus.browser.test.ts` (browsers and Node) and `test/runtime-matrix.ts` (the built
 `dist/` on Node and Bun); `src/managed*.browser.test.ts` also take fixtures from `managed-key/`.
 
