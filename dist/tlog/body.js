@@ -1,0 +1,101 @@
+/*
+ * Transparency log body verification
+ *
+ * Based on sigstore-js:
+ * https://github.com/sigstore/sigstore-js/blob/main/packages/verify/src/tlog/index.ts
+ *
+ * Key differences from sigstore-js:
+ * - Browser-compatible: uses Uint8Array instead of Buffer for binary data
+ * - Direct bundle comparison instead of SignatureContent abstraction
+ */
+import { base64Decode, base64ToUint8Array, toDER, Uint8ArrayToString } from "@freedomofpress/crypto-browser";
+import { fail } from "../errors.js";
+import { ManagedPublicKey } from "../key.js";
+import { X509Certificate } from "../x509/cert.js";
+import { verifyDSSEBody } from "./dsse.js";
+import { verifyHashedRekordBody } from "./hashedrekord.js";
+import { verifyIntotoBody } from "./intoto.js";
+// Checks that the entry body matches the bundle content and was logged under the signing certificate or key.
+export async function verifyTLogBody(entry, bundle, signer) {
+    const rekorEntry = parseCanonicalBody(entry);
+    const { kind, version } = entry.kindVersion;
+    if (kind !== rekorEntry.kind || version !== rekorEntry.apiVersion) {
+        fail("tlog-entry-malformed", `kind/version mismatch - expected: ${kind}/${version}, received: ${rekorEntry.kind}/${rekorEntry.apiVersion}`);
+    }
+    switch (rekorEntry.kind) {
+        case "hashedrekord":
+            return verifyHashedRekordBody(rekorEntry, bundle, signer);
+        case "dsse":
+            return verifyDSSEBody(rekorEntry, bundle, signer);
+        case "intoto":
+            return verifyIntotoBody(rekorEntry, bundle, signer);
+        default:
+            fail("tlog-entry-kind", `Unsupported TLog entry kind: ${rekorEntry.kind}`);
+    }
+}
+// Compares the signer recorded in a Rekor v1 entry (base64 of a PEM certificate or public key) with the signer.
+export function assertLoggedSigner(signer, encoded) {
+    if (signer instanceof X509Certificate) {
+        return assertLoggedCertificate(signer, encoded, true);
+    }
+    if (typeof encoded !== "string" || encoded === "") {
+        fail("tlog-key-mismatch", "TLog entry does not record the public key");
+    }
+    let logged;
+    try {
+        logged = toDER(Uint8ArrayToString(base64ToUint8Array(encoded)));
+    }
+    catch {
+        fail("tlog-entry-malformed", "TLog entry public key is not valid PEM");
+    }
+    if (!signer.equals(logged)) {
+        fail("tlog-key-mismatch", "Public key in TLog entry does not match the verification key");
+    }
+}
+/**
+ * Compares the verifier recorded in a Rekor v2 entry with the signer. For a managed key, the
+ * recorded key details must name the curve of the recorded key, which must be the signer's key.
+ */
+export function assertLoggedV2Verifier(signer, verifier) {
+    if (signer instanceof X509Certificate) {
+        return assertLoggedCertificate(signer, verifier?.x509Certificate?.rawBytes, false);
+    }
+    const rawBytes = verifier?.publicKey?.rawBytes;
+    if (verifier?.x509Certificate !== undefined || typeof rawBytes !== "string" || rawBytes === "") {
+        fail("tlog-key-mismatch", "TLog entry does not record a public key");
+    }
+    const logged = base64ToUint8Array(rawBytes);
+    const details = ManagedPublicKey.keyDetails(verifier?.keyDetails);
+    const curve = ManagedPublicKey.curveOf(logged);
+    if (!details || details.namedCurve !== curve) {
+        fail("tlog-key-details-mismatch", `key details ${String(verifier?.keyDetails)} do not match the logged ${curve ?? "unsupported"} key`);
+    }
+    if (!signer.equals(logged)) {
+        fail("tlog-key-mismatch", "Public key in TLog entry does not match the verification key");
+    }
+}
+// Compares the certificate recorded in the entry (base64 DER, or base64 PEM for Rekor v1) with the signing certificate.
+export function assertLoggedCertificate(cert, encoded, pem) {
+    if (typeof encoded !== "string" || encoded === "") {
+        throw new Error("TLog entry does not record the signing certificate");
+    }
+    const bytes = base64ToUint8Array(encoded);
+    const logged = X509Certificate.parse(pem ? Uint8ArrayToString(bytes) : bytes);
+    if (!cert.equals(logged)) {
+        throw new Error("Certificate in TLog entry does not match the signing certificate");
+    }
+}
+function parseCanonicalBody(entry) {
+    try {
+        const decodedBody = base64Decode(entry.canonicalizedBody);
+        const rekorEntry = JSON.parse(decodedBody);
+        if (!rekorEntry.apiVersion || !rekorEntry.kind || !rekorEntry.spec) {
+            throw new Error("Invalid Rekor entry structure");
+        }
+        return rekorEntry;
+    }
+    catch (error) {
+        fail("tlog-entry-malformed", `Failed to parse canonicalized body: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+//# sourceMappingURL=body.js.map

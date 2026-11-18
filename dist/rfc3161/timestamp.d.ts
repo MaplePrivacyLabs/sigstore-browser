@@ -1,0 +1,35 @@
+import { ASN1Obj } from "@freedomofpress/crypto-browser";
+import { TSTInfo } from "./tstinfo.js";
+export declare class RFC3161Timestamp {
+    root: ASN1Obj;
+    constructor(asn1: ASN1Obj);
+    static parse(der: Uint8Array): RFC3161Timestamp;
+    get status(): bigint;
+    get contentType(): string;
+    get eContentType(): string;
+    get signingTime(): Date;
+    get signerIssuer(): Uint8Array;
+    get signerSerialNumber(): Uint8Array;
+    get signerDigestAlgorithm(): string;
+    get signatureAlgorithm(): string;
+    get signatureValue(): Uint8Array;
+    get tstInfo(): TSTInfo;
+    verify(data: Uint8Array, publicKey: CryptoKey): Promise<void>;
+    private verifyMessageDigest;
+    private verifySignature;
+    private get pkiStatusInfoObj();
+    private get timeStampTokenObj();
+    private get contentTypeObj();
+    private get signedDataObj();
+    private get encapContentInfoObj();
+    private get signerInfosObj();
+    private get signerInfoObj();
+    private get eContentTypeObj();
+    private get eContentObj();
+    private get signedAttrsObj();
+    private get messageDigestAttributeObj();
+    private get signerSidObj();
+    private get signerDigestAlgorithmObj();
+    private get signatureAlgorithmObj();
+    private get signatureValueObj();
+}

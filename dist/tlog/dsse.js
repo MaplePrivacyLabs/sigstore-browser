@@ -1,0 +1,91 @@
+/*
+ * DSSE transparency log entry verification
+ *
+ * Based on sigstore-js:
+ * https://github.com/sigstore/sigstore-js/blob/main/packages/verify/src/tlog/dsse.ts
+ *
+ * Key differences from sigstore-js:
+ * - Browser-compatible: uses Uint8Array instead of Buffer for binary data
+ * - Direct bundle field comparison instead of SignatureContent abstraction
+ * - Adds verifyDSSE002Body() - new functionality (reference only supports v0.0.1)
+ */
+import { base64ToUint8Array, digest, hexToUint8Array, uint8ArrayEqual } from "@freedomofpress/crypto-browser";
+import { fail } from "../errors.js";
+import { getHashAlgorithm } from "../interfaces.js";
+import { assertLoggedSigner, assertLoggedV2Verifier } from "./body.js";
+export async function verifyDSSEBody(entry, bundle, signer) {
+    const dsseEntry = entry;
+    switch (dsseEntry.apiVersion) {
+        case "0.0.1":
+            return verifyDSSE001Body(dsseEntry, bundle, signer);
+        case "0.0.2":
+            return verifyDSSE002Body(dsseEntry, bundle, signer);
+        default:
+            fail("tlog-entry-kind", `Unsupported dsse version: ${dsseEntry.apiVersion}`);
+    }
+}
+async function verifyDSSE001Body(entry, bundle, signer) {
+    if (!bundle.dsseEnvelope) {
+        fail("tlog-entry-kind", "Bundle missing dsseEnvelope for DSSE entry");
+    }
+    if (!entry.spec.signatures || entry.spec.signatures.length !== 1) {
+        fail("tlog-entry-malformed", "DSSE entry must have exactly one signature");
+    }
+    assertLoggedSigner(signer, entry.spec.signatures[0].verifier);
+    const tlogSig = entry.spec.signatures[0].signature;
+    const tlogSigBytes = base64ToUint8Array(tlogSig);
+    if (bundle.dsseEnvelope.signatures.length === 0) {
+        throw new Error("Bundle DSSE envelope missing signatures");
+    }
+    const bundleSigBytes = base64ToUint8Array(bundle.dsseEnvelope.signatures[0].sig);
+    if (!uint8ArrayEqual(tlogSigBytes, bundleSigBytes)) {
+        fail("tlog-signature-mismatch", "DSSE signature mismatch between TLog entry and bundle");
+    }
+    if (!entry.spec.payloadHash?.value || !entry.spec.payloadHash?.algorithm) {
+        fail("tlog-entry-malformed", "DSSE entry missing payloadHash or algorithm");
+    }
+    const hashAlg = getHashAlgorithm(entry.spec.payloadHash.algorithm);
+    const tlogHashBytes = hexToUint8Array(entry.spec.payloadHash.value);
+    const payloadBytes = base64ToUint8Array(bundle.dsseEnvelope.payload);
+    const bundleHashBytes = await digest(hashAlg, payloadBytes);
+    if (!uint8ArrayEqual(tlogHashBytes, bundleHashBytes)) {
+        fail("tlog-digest-mismatch", "DSSE payload hash mismatch between TLog entry and bundle");
+    }
+}
+// New functionality for DSSE v0.0.2 (not in sigstore-js reference, which only supports v0.0.1)
+async function verifyDSSE002Body(entry, bundle, signer) {
+    if (!bundle.dsseEnvelope) {
+        fail("tlog-entry-kind", "Bundle missing dsseEnvelope for DSSE v0.0.2 entry");
+    }
+    const spec = entry.spec.dsseV002;
+    if (!spec) {
+        fail("tlog-entry-malformed", "DSSE v0.0.2 entry missing dsseV002 spec");
+    }
+    if (!spec.signatures || spec.signatures.length !== 1) {
+        fail("tlog-entry-malformed", "DSSE v0.0.2 entry must have exactly one signature");
+    }
+    assertLoggedV2Verifier(signer, spec.signatures[0].verifier);
+    const tlogSig = spec.signatures[0].content;
+    if (typeof tlogSig !== "string") {
+        fail("tlog-entry-malformed", "DSSE v0.0.2 entry signature missing content");
+    }
+    const tlogSigBytes = base64ToUint8Array(tlogSig);
+    if (bundle.dsseEnvelope.signatures.length === 0) {
+        throw new Error("Bundle DSSE envelope missing signatures");
+    }
+    const bundleSigBytes = base64ToUint8Array(bundle.dsseEnvelope.signatures[0].sig);
+    if (!uint8ArrayEqual(tlogSigBytes, bundleSigBytes)) {
+        fail("tlog-signature-mismatch", "DSSE signature mismatch between TLog entry and bundle (v0.0.2)");
+    }
+    if (!spec.payloadHash?.digest || !spec.payloadHash?.algorithm) {
+        fail("tlog-entry-malformed", "DSSE v0.0.2 entry missing payloadHash or algorithm");
+    }
+    const hashAlg = getHashAlgorithm(spec.payloadHash.algorithm);
+    const tlogHashBytes = base64ToUint8Array(spec.payloadHash.digest);
+    const payloadBytes = base64ToUint8Array(bundle.dsseEnvelope.payload);
+    const bundleHashBytes = await digest(hashAlg, payloadBytes);
+    if (!uint8ArrayEqual(tlogHashBytes, bundleHashBytes)) {
+        fail("tlog-digest-mismatch", "DSSE payload hash mismatch between TLog entry and bundle (v0.0.2)");
+    }
+}
+//# sourceMappingURL=dsse.js.map
