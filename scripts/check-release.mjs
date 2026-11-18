@@ -11,8 +11,10 @@ if (process.versions.node !== release.node) throw new Error(`Use Node ${release.
 if (!/^[a-f0-9]{40}$/.test(release.source)) throw new Error('Expected a full source commit');
 const scratch = mkdtempSync(join(tmpdir(), 'release-check-'));
 try {
-  const archive = execFileSync('git', ['archive', release.source], { cwd: root });
-  execFileSync('tar', ['-x', '-C', scratch], { input: archive });
+  const archive = join(scratch, 'source.tar');
+  run('git', ['archive', '--output', archive, release.source], root);
+  run('tar', ['-xf', archive, '-C', scratch], root);
+  rmSync(archive);
   // Use the release lockfile: dependencies may themselves need prebuilt artifacts.
   for (const file of ['package.json', 'package-lock.json']) {
     copyFileSync(join(root, file), join(scratch, file));
