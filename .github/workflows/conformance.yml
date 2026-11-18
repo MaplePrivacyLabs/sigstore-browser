@@ -3,32 +3,42 @@ name: sigstore-conformance
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, 'maple/**']
   pull_request:
   workflow_dispatch:
   workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   conformance:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
 
+      - name: Require release metadata before installation
+        id: mode
+        run: node scripts/ci-mode.mjs
       - run: npm ci
-      - run: npm run build
+        if: steps.mode.outputs.release == 'false'
+      - run: npm ci --ignore-scripts
+        if: steps.mode.outputs.release == 'true'
+      - run: node node_modules/typescript/bin/tsc --project tsconfig.json
+        if: steps.mode.outputs.release == 'false'
       - run: chmod +x dist/cli.js
 
       # sigstore-conformance v0.0.21 pins a pydantic-core that cannot build on the runner's default Python 3.14.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
 
-      - uses: sigstore/sigstore-conformance@v0.0.21
+      - uses: sigstore/sigstore-conformance@244638a7a138ae9f6106cfe2d44a698eccd3bef7
         with:
           entrypoint: dist/cli.js
           skip-signing: true

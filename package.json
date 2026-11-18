@@ -22,7 +22,6 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
     "test": "vitest run --config vite.config.playwright.ts",
     "test:node": "vitest run",
     "test:browsers": "BROWSERS=chromium,firefox,webkit vitest run --config vite.config.playwright.ts",
@@ -52,6 +51,6 @@
   },
   "dependencies": {
     "@freedomofpress/crypto-browser": "^0.3.0",
-    "@freedomofpress/tuf-browser": "git+https://github.com:443/MaplePrivacyLabs/tuf-browser.git#ac56862b56cdd7d5a53ade5ba97a299a9626e089"
+    "@freedomofpress/tuf-browser": "git+https://github.com:443/MaplePrivacyLabs/tuf-browser.git#b454f9d27566a448195842d4640afa6aad0e96dc"
   }
 }
