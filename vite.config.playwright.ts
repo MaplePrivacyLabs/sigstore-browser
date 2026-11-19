@@ -2,7 +2,10 @@ import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
 // BROWSERS=chromium,firefox,webkit runs the suite in each engine; the default is Chromium only.
-const browsers = (process.env.BROWSERS ?? "chromium").split(",").map((b) => b.trim()).filter(Boolean);
+const browsers = (process.env.BROWSERS ?? "chromium")
+  .split(",")
+  .map((browser) => browser.trim())
+  .filter(Boolean);
 
 export default defineConfig({
   test: {

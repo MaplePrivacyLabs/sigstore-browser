@@ -19,7 +19,9 @@ type Json = any;
 const corpus = inject("corpus");
 const vector = (id: string): ManagedKeyVector => {
   const v = corpus.managedKey.find((x) => x.id === id);
-  if (!v) throw new Error(`no vector ${id}`);
+  if (!v) {
+    throw new Error(`no vector ${id}`);
+  }
   return v;
 };
 
@@ -102,7 +104,9 @@ async function reason(p: Promise<unknown>): Promise<string> {
     await p;
     return "accept";
   } catch (e) {
-    if (e instanceof VerificationError) return e.code;
+    if (e instanceof VerificationError) {
+      return e.code;
+    }
     throw e;
   }
 }
@@ -155,7 +159,8 @@ function rootWithUnusableKeys(): Json {
 describe("ManagedKeyVerifier", () => {
   describe("verification", () => {
     it("verifies a P-384 DSSE bundle logged in Rekor v2 with a timestamp, using the caller's key", async () => {
-      const result = await (await verifier()).verifyDsse(p384.bundle, p384.key);
+      const v = await verifier();
+      const result = await v.verifyDsse(p384.bundle, p384.key);
 
       expect(result.payloadType).toBe("application/vnd.in-toto+json");
       const statement = JSON.parse(new TextDecoder().decode(result.payload));
@@ -166,26 +171,32 @@ describe("ManagedKeyVerifier", () => {
 
     it("accepts the bundle as UTF-8 bytes", async () => {
       const bytes = new TextEncoder().encode(p384.bundle);
-      await expect((await verifier()).verifyDsse(bytes, p384.key)).resolves.toBeDefined();
+      const v = await verifier();
+      await expect(v.verifyDsse(bytes, p384.key)).resolves.toBeDefined();
     });
 
     it("accepts the key as DER SubjectPublicKeyInfo", async () => {
       const der = base64ToBytes(p384.key.replace(/-----[A-Z ]+-----/g, "").replace(/\s/g, ""));
-      await expect((await verifier()).verifyDsse(p384.bundle, der)).resolves.toBeDefined();
+      const v = await verifier();
+      await expect(v.verifyDsse(p384.bundle, der)).resolves.toBeDefined();
     });
 
     it("verifies a P-256 bundle", async () => {
-      await expect((await verifier()).verifyDsse(p256.bundle, p256.key)).resolves.toBeDefined();
+      const v = await verifier();
+      await expect(v.verifyDsse(p256.bundle, p256.key)).resolves.toBeDefined();
     });
 
     it("accepts the artifact named by the statement subject", async () => {
       const artifact = base64ToBytes(p384.artifact);
-      await expect((await verifier()).verifyArtifact(p384.bundle, p384.key, artifact)).resolves.toBe(true);
+      const v = await verifier();
+      await expect(v.verifyArtifact(p384.bundle, p384.key, artifact)).resolves.toBe(true);
     });
 
     it("rejects an artifact that is not the statement subject", async () => {
       const other = new Uint8Array([1, 2, 3]);
-      expect(await reason((await verifier()).verifyArtifact(p384.bundle, p384.key, other))).toBe("artifact-mismatch");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyArtifact(p384.bundle, p384.key, other));
+      expect(actualReason).toBe("artifact-mismatch");
     });
   });
 
@@ -194,7 +205,9 @@ describe("ManagedKeyVerifier", () => {
       const relabelled = parse(otherP384);
       relabelled.verificationMaterial.publicKey.hint = parse(p384).verificationMaterial.publicKey.hint;
 
-      expect(await reason((await verifier()).verifyDsse(text(relabelled), p384.key))).toBe("dsse-signature-invalid");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyDsse(text(relabelled), p384.key));
+      expect(actualReason).toBe("dsse-signature-invalid");
     });
 
     it.each([
@@ -208,8 +221,10 @@ describe("ManagedKeyVerifier", () => {
       });
       const v = await verifier();
 
-      expect(await reason(v.verifyDsse(bundle, p384.key))).toBe("accept");
-      expect(await reason(v.verifyDsse(bundle, otherP384.key))).toBe("dsse-signature-invalid");
+      const actualReason = await reason(v.verifyDsse(bundle, p384.key));
+      expect(actualReason).toBe("accept");
+      const otherKeyReason = await reason(v.verifyDsse(bundle, otherP384.key));
+      expect(otherKeyReason).toBe("dsse-signature-invalid");
     });
 
     it.each([
@@ -224,7 +239,9 @@ describe("ManagedKeyVerifier", () => {
         ),
       },
     ])("rejects $name as the caller's key", async ({ key }) => {
-      expect(await reason((await verifier()).verifyDsse(p384.bundle, key))).toBe("key-unsupported");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyDsse(p384.bundle, key));
+      expect(actualReason).toBe("key-unsupported");
     });
   });
 
@@ -242,7 +259,9 @@ describe("ManagedKeyVerifier", () => {
       const bundle = changed((b) => {
         b.verificationMaterial.certificate = certificate;
       });
-      expect(await reason((await verifier(options)).verifyDsse(bundle, p384.key))).toBe("conflicting-oneof");
+      const v = await verifier(options);
+      const actualReason = await reason(v.verifyDsse(bundle, p384.key));
+      expect(actualReason).toBe("conflicting-oneof");
     });
 
     it.each([
@@ -253,7 +272,9 @@ describe("ManagedKeyVerifier", () => {
         delete b.verificationMaterial.publicKey;
         b.verificationMaterial.x509CertificateChain = { certificates: [certificate] };
       });
-      expect(await reason((await verifier(options)).verifyDsse(bundle, p384.key))).toBe(
+      const v = await verifier(options);
+      const actualReason = await reason(v.verifyDsse(bundle, p384.key));
+      expect(actualReason).toBe(
         "verification-material-unsupported",
       );
     });
@@ -266,7 +287,9 @@ describe("ManagedKeyVerifier", () => {
         delete b.verificationMaterial.publicKey;
         b.verificationMaterial.certificate = certificate;
       });
-      expect(await reason((await verifier(options)).verifyDsse(bundle, p384.key))).toBe(
+      const v = await verifier(options);
+      const actualReason = await reason(v.verifyDsse(bundle, p384.key));
+      expect(actualReason).toBe(
         "verification-material-unsupported",
       );
     });
@@ -284,13 +307,17 @@ describe("ManagedKeyVerifier", () => {
       { name: "v0.4", mediaType: CANONICAL_V04 },
       { name: "legacy v0.3", mediaType: LEGACY_V03 },
     ])("strict profile rejects $name", async ({ mediaType }) => {
-      expect(await reason((await verifier()).verifyDsse(withMediaType(mediaType), p384.key))).toBe(
+      const v = await verifier();
+      const actualReason = await reason(v.verifyDsse(withMediaType(mediaType), p384.key));
+      expect(actualReason).toBe(
         "media-type-unsupported",
       );
     });
 
     it("strict profile accepts the canonical v0.3 media type", async () => {
-      expect(await reason((await verifier()).verifyDsse(withMediaType(CANONICAL_V03), p384.key))).toBe("accept");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyDsse(withMediaType(CANONICAL_V03), p384.key));
+      expect(actualReason).toBe("accept");
     });
 
     // As for certificate bundles: both spellings of v0.2 and v0.3, and not v0.1.
@@ -299,7 +326,9 @@ describe("ManagedKeyVerifier", () => {
       { name: "v0.2", mediaType: CANONICAL_V02, expected: "accept" },
       { name: "v0.1", mediaType: CANONICAL_V01, expected: "media-type-unsupported" },
     ])("default configuration gives $expected for $name", async ({ mediaType, expected }) => {
-      expect(await reason((await verifier(DEFAULTS)).verifyDsse(withMediaType(mediaType), p384.key))).toBe(expected);
+      const v = await verifier(DEFAULTS);
+      const actualReason = await reason(v.verifyDsse(withMediaType(mediaType), p384.key));
+      expect(actualReason).toBe(expected);
     });
 
     it.each([
@@ -307,7 +336,9 @@ describe("ManagedKeyVerifier", () => {
       { name: "legacy v0.2", mediaType: LEGACY_V02, expected: "media-type-unsupported" },
       { name: "v0.2", mediaType: CANONICAL_V02, expected: "accept" },
     ])("requireCanonicalMediaType alone gives $expected for $name", async ({ mediaType, expected }) => {
-      expect(await reason((await verifier(CANONICAL_ONLY)).verifyDsse(withMediaType(mediaType), p384.key))).toBe(
+      const v = await verifier(CANONICAL_ONLY);
+      const actualReason = await reason(v.verifyDsse(withMediaType(mediaType), p384.key));
+      expect(actualReason).toBe(
         expected,
       );
     });
@@ -324,7 +355,9 @@ describe("ManagedKeyVerifier", () => {
       "rejects a $name repeated member name",
       async ({ bundle }) => {
         expect(bundle).not.toBe(p384.bundle);
-        expect(await reason((await verifier()).verifyDsse(bundle, p384.key))).toBe("duplicate-json-key");
+        const v = await verifier();
+        const actualReason = await reason(v.verifyDsse(bundle, p384.key));
+        expect(actualReason).toBe("duplicate-json-key");
       },
     );
 
@@ -337,21 +370,27 @@ describe("ManagedKeyVerifier", () => {
     });
 
     it("rejects truncated JSON as bundle-malformed", async () => {
-      expect(await reason((await verifier()).verifyDsse(p384.bundle.slice(0, -10), p384.key))).toBe("bundle-malformed");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyDsse(p384.bundle.slice(0, -10), p384.key));
+      expect(actualReason).toBe("bundle-malformed");
     });
 
     it("rejects JSON nested deeper than the scanner allows as bundle-malformed", async () => {
       const deep = "[".repeat(100) + "]".repeat(100);
-      expect(await reason((await verifier()).verifyDsse(deep, p384.key))).toBe("bundle-malformed");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyDsse(deep, p384.key));
+      expect(actualReason).toBe("bundle-malformed");
     });
 
     // The check needs the text, so an already parsed object is refused rather than silently unchecked.
     it("refuses an already parsed bundle when repeated names must be rejected", async () => {
-      await expect((await verifier()).verifyDsse(parse(p384), p384.key)).rejects.toThrow(TypeError);
+      const v = await verifier();
+      await expect(v.verifyDsse(parse(p384), p384.key)).rejects.toThrow(TypeError);
     });
 
     it("accepts an already parsed bundle by default, as for certificate bundles", async () => {
-      await expect((await verifier(DEFAULTS)).verifyDsse(parse(p384), p384.key)).resolves.toBeDefined();
+      const v = await verifier(DEFAULTS);
+      await expect(v.verifyDsse(parse(p384), p384.key)).resolves.toBeDefined();
     });
   });
 
@@ -360,29 +399,34 @@ describe("ManagedKeyVerifier", () => {
 
     it("rejects text one byte over the limit", async () => {
       const v = await withLimit(p384.bundle.length - 1);
-      expect(await reason(v.verifyDsse(p384.bundle, p384.key))).toBe("bundle-too-large");
+      const actualReason = await reason(v.verifyDsse(p384.bundle, p384.key));
+      expect(actualReason).toBe("bundle-too-large");
     });
 
     it("rejects bytes one byte over the limit", async () => {
       const v = await withLimit(p384.bundle.length - 1);
-      expect(await reason(v.verifyDsse(new TextEncoder().encode(p384.bundle), p384.key))).toBe("bundle-too-large");
+      const actualReason = await reason(v.verifyDsse(new TextEncoder().encode(p384.bundle), p384.key));
+      expect(actualReason).toBe("bundle-too-large");
     });
 
     it("accepts a bundle of exactly the limit", async () => {
       const v = await withLimit(p384.bundle.length);
-      expect(await reason(v.verifyDsse(p384.bundle, p384.key))).toBe("accept");
+      const actualReason = await reason(v.verifyDsse(p384.bundle, p384.key));
+      expect(actualReason).toBe("accept");
     });
 
     // 400 two-byte characters exceed a limit only 100 above the text's UTF-16 length.
     it("counts multi-byte characters as their UTF-8 length", async () => {
       const padded = p384.bundle.replace('"mediaType"', `"x": "${"é".repeat(400)}", "mediaType"`);
       const v = await withLimit(padded.length + 100);
-      expect(await reason(v.verifyDsse(padded, p384.key))).toBe("bundle-too-large");
+      const actualReason = await reason(v.verifyDsse(padded, p384.key));
+      expect(actualReason).toBe("bundle-too-large");
     });
 
     it("rejects bytes that are not UTF-8 as bundle-malformed", async () => {
       const v = await withLimit(p384.bundle.length - 1);
-      expect(await reason(v.verifyDsse(new Uint8Array([0x7b, 0xff, 0x7d]), p384.key))).toBe("bundle-malformed");
+      const actualReason = await reason(v.verifyDsse(new Uint8Array([0x7b, 0xff, 0x7d]), p384.key));
+      expect(actualReason).toBe("bundle-malformed");
     });
   });
 
@@ -408,14 +452,17 @@ describe("ManagedKeyVerifier", () => {
       { name: "an unknown log", profile: "strict", options: STRICT, bundle: unknownLog, expected: "tlog-unknown-log" },
       { name: "an unknown log", profile: "default", options: DEFAULTS, bundle: unknownLog, expected: "tlog-threshold" },
     ])("gives $expected for $name ($profile)", async ({ options, bundle, expected }) => {
-      expect(await reason((await verifier(options)).verifyDsse(bundle, p384.key))).toBe(expected);
+      const v = await verifier(options);
+      const actualReason = await reason(v.verifyDsse(bundle, p384.key));
+      expect(actualReason).toBe(expected);
     });
   });
 
   describe("trusted root", () => {
     it("ignores keys it cannot load when the entry does not need them", async () => {
       const v = await verifier(STRICT, rootWithUnusableKeys());
-      expect(await reason(v.verifyDsse(p384.bundle, p384.key))).toBe("accept");
+      const actualReason = await reason(v.verifyDsse(p384.bundle, p384.key));
+      expect(actualReason).toBe("accept");
     });
 
     it("differs from the certificate flow's loader, which rejects that root as a whole", async () => {
@@ -428,7 +475,8 @@ describe("ManagedKeyVerifier", () => {
       entryLog.publicKey.rawBytes = "AAAA";
 
       const v = await verifier(STRICT, root);
-      expect(await reason(v.verifyDsse(p384.bundle, p384.key))).toBe("tlog-log-key-unsupported");
+      const actualReason = await reason(v.verifyDsse(p384.bundle, p384.key));
+      expect(actualReason).toBe("tlog-log-key-unsupported");
     });
   });
 
@@ -464,7 +512,8 @@ describe("ManagedKeyVerifier", () => {
       const v = await verifier({ bundleVersions });
       bundleVersions.push("0.2");
       // Without its own copy, the verifier would accept the v0.2-labelled bundle.
-      expect(await reason(v.verifyDsse(v02.bundle, v02.key))).toBe("media-type-unsupported");
+      const actualReason = await reason(v.verifyDsse(v02.bundle, v02.key));
+      expect(actualReason).toBe("media-type-unsupported");
     });
 
     it("keeps its own options frozen after construction", async () => {
@@ -486,18 +535,23 @@ describe("ManagedKeyVerifier", () => {
   describe("messageSignature digests", () => {
     it("verifies a P-384 messageSignature up to the log entry", async () => {
       const { bundle, artifact, key } = await messageSignatureFixture(p384, "P-384");
-      expect(await reason((await verifier()).verifyArtifact(bundle, key, artifact))).toBe("tlog-key-mismatch");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyArtifact(bundle, key, artifact));
+      expect(actualReason).toBe("tlog-key-mismatch");
     });
 
     it("verifies a P-256 messageSignature up to the log entry", async () => {
       const { bundle, artifact, key } = await messageSignatureFixture(p256, "P-256");
-      expect(await reason((await verifier()).verifyArtifact(bundle, key, artifact))).toBe("tlog-key-mismatch");
+      const v = await verifier();
+      const actualReason = await reason(v.verifyArtifact(bundle, key, artifact));
+      expect(actualReason).toBe("tlog-key-mismatch");
     });
 
     it("accepts the key's own digest length for digest-only verification", async () => {
       const { bundle, digest, key } = await messageSignatureFixture(p384, "P-384");
       const v = await verifier({ ...DEFAULTS, verifyDigest: verifySignatureOverDigest });
-      expect(await reason(v.verifyArtifact(bundle, key, digest, true))).toBe("tlog-key-mismatch");
+      const actualReason = await reason(v.verifyArtifact(bundle, key, digest, true));
+      expect(actualReason).toBe("tlog-key-mismatch");
     });
 
     it("rejects a 32-byte digest for a P-384 key before calling verifyDigest", async () => {
@@ -526,7 +580,9 @@ describe("ManagedKeyVerifier", () => {
       const sha256 = new Uint8Array(await crypto.subtle.digest("SHA-256", artifact));
       const swapped = JSON.parse(bundle);
       swapped.messageSignature.messageDigest.digest = Uint8ArrayToBase64(sha256);
-      expect(await reason((await verifier()).verifyArtifact(JSON.stringify(swapped), key, artifact))).toBe(
+      const v = await verifier();
+      const actualReason = await reason(v.verifyArtifact(JSON.stringify(swapped), key, artifact));
+      expect(actualReason).toBe(
         "artifact-mismatch",
       );
     });
@@ -535,7 +591,9 @@ describe("ManagedKeyVerifier", () => {
       const { bundle, artifact, key } = await messageSignatureFixture(p384, "P-384");
       const swapped = JSON.parse(bundle);
       swapped.messageSignature.messageDigest.algorithm = "SHA2_256";
-      expect(await reason((await verifier()).verifyArtifact(JSON.stringify(swapped), key, artifact))).toBe(
+      const v = await verifier();
+      const actualReason = await reason(v.verifyArtifact(JSON.stringify(swapped), key, artifact));
+      expect(actualReason).toBe(
         "artifact-mismatch",
       );
     });

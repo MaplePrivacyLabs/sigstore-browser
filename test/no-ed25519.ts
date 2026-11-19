@@ -7,11 +7,14 @@ export function withoutEd25519(subtle: SubtleCrypto): SubtleCrypto {
   return new Proxy(subtle, {
     get(target, prop) {
       const value = Reflect.get(target, prop) as unknown;
-      if (typeof value !== "function") return value;
+      if (typeof value !== "function") {
+        return value;
+      }
       return (...args: unknown[]) => {
         // importKey takes the algorithm third; the other operations take it first.
         const algorithm = (prop === "importKey" ? args[2] : args[0]) as { name?: string } | string | undefined;
-        if ((typeof algorithm === "string" ? algorithm : algorithm?.name) === "Ed25519") {
+        const name = typeof algorithm === "string" ? algorithm : algorithm?.name;
+        if (name === "Ed25519") {
           return Promise.reject(new DOMException("Unrecognized name.", "NotSupportedError"));
         }
         return (value as (...a: unknown[]) => unknown).apply(target, args);

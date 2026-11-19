@@ -59,10 +59,16 @@ function ecdsaCurve(spki: Uint8Array): CurveInfo | undefined {
   try {
     const asn1 = ASN1Obj.parseBuffer(spki);
     const algorithm = asn1.subs[0];
-    if (asn1.subs.length !== 2 || algorithm.subs.length !== 2) return undefined;
-    if (algorithm.subs[0].toOID() !== OID_EC_PUBLIC_KEY) return undefined;
+    if (asn1.subs.length !== 2 || algorithm.subs.length !== 2) {
+      return undefined;
+    }
+    if (algorithm.subs[0].toOID() !== OID_EC_PUBLIC_KEY) {
+      return undefined;
+    }
     const oid = algorithm.subs[1].toOID();
-    if (!Object.prototype.hasOwnProperty.call(CURVES, oid)) return undefined;
+    if (!Object.prototype.hasOwnProperty.call(CURVES, oid)) {
+      return undefined;
+    }
     return CURVES[oid];
   } catch {
     return undefined;
@@ -116,8 +122,12 @@ export class ManagedPublicKey {
 
   /** Curve and digest named by Rekor key details, if they are ones this verifier understands. */
   static curveForKeyDetails(keyDetails: unknown): CurveInfo | undefined {
-    if (typeof keyDetails !== "string") return undefined;
-    if (!Object.prototype.hasOwnProperty.call(KEY_DETAILS, keyDetails)) return undefined;
+    if (typeof keyDetails !== "string") {
+      return undefined;
+    }
+    if (!Object.prototype.hasOwnProperty.call(KEY_DETAILS, keyDetails)) {
+      return undefined;
+    }
     return KEY_DETAILS[keyDetails];
   }
 

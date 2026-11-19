@@ -147,7 +147,9 @@ async function step<T>(code: ReasonCode, fn: () => Promise<T> | T): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof VerificationError) throw e;
+    if (e instanceof VerificationError) {
+      throw e;
+    }
     fail(code, e instanceof Error ? e.message : String(e));
   }
 }
@@ -155,8 +157,12 @@ async function step<T>(code: ReasonCode, fn: () => Promise<T> | T): Promise<T> {
 // Whether `text` is longer than `limit` bytes as UTF-8. Each UTF-16 code unit encodes to between one
 // and three bytes, so the text is only encoded when its length alone does not decide.
 function exceedsUtf8Bytes(text: string, limit: number): boolean {
-  if (text.length > limit) return true;
-  if (text.length * 3 <= limit) return false;
+  if (text.length > limit) {
+    return true;
+  }
+  if (text.length * 3 <= limit) {
+    return false;
+  }
   return new TextEncoder().encode(text).length > limit;
 }
 
@@ -165,14 +171,18 @@ function exceedsUtf8Bytes(text: string, limit: number): boolean {
 async function loadTrustedLog(log: unknown): Promise<TrustedLog | undefined> {
   let logId: Uint8Array;
   try {
-    if (!isObj(log) || typeof log.logId?.keyId !== "string") return undefined;
+    if (!isObj(log) || typeof log.logId?.keyId !== "string") {
+      return undefined;
+    }
     logId = base64ToUint8Array(log.logId.keyId);
   } catch {
     return undefined;
   }
   try {
     const { keyDetails, rawBytes } = log.publicKey ?? {};
-    if (typeof keyDetails !== "string" || typeof rawBytes !== "string") throw new Error("missing public key");
+    if (typeof keyDetails !== "string" || typeof rawBytes !== "string") {
+      throw new Error("missing public key");
+    }
     return {
       logId,
       baseUrl: log.baseUrl,
@@ -192,10 +202,14 @@ async function loadTrustedLog(log: unknown): Promise<TrustedLog | undefined> {
 // A timestamp authority with a valid validity period and a parseable, non-empty certificate chain.
 function isLoadableAuthority(ca: unknown): ca is RawTimestampAuthority {
   try {
-    if (!isObj(ca)) return false;
+    if (!isObj(ca)) {
+      return false;
+    }
     parseValidityPeriod(ca.validFor);
     const certs = ca.certChain?.certificates;
-    if (!Array.isArray(certs) || certs.length === 0) return false;
+    if (!Array.isArray(certs) || certs.length === 0) {
+      return false;
+    }
     for (const certificate of certs) {
       const bytes = base64ToUint8Array(certificate.rawBytes);
       X509Certificate.parse(bytes);
@@ -208,7 +222,9 @@ function isLoadableAuthority(ca: unknown): ca is RawTimestampAuthority {
 
 // The origin a Rekor v2 log signs checkpoints under: the host of its base URL, as sigstore-go derives it.
 function logOrigin(baseUrl: unknown): string | undefined {
-  if (typeof baseUrl !== "string") return undefined;
+  if (typeof baseUrl !== "string") {
+    return undefined;
+  }
   try {
     const url = new URL(baseUrl);
     const isHttp = url.protocol === "https:" || url.protocol === "http:";
@@ -250,7 +266,9 @@ function checkManagedKeyContent(bundle: JsonObject, content: "dsse" | "artifact"
   const env = bundle.dsseEnvelope;
   const hasDsse = isObj(env) && Array.isArray(env.signatures) && env.signatures.length === 1;
   const hasMessageSignature = content === "artifact" && isObj(bundle.messageSignature);
-  if (hasDsse || hasMessageSignature) return;
+  if (hasDsse || hasMessageSignature) {
+    return;
+  }
 
   if (content === "dsse") {
     fail("content-unsupported", "Bundle must contain a DSSE envelope with exactly one signature");
@@ -301,7 +319,9 @@ export class ManagedKeyVerifier {
    * entries and timestamps that do not use it. Fulcio CAs and CT logs are not used.
    */
   async loadTrustedRoot(root: TrustedRoot): Promise<void> {
-    if (!isObj(root)) throw new Error("Trusted root must be an object");
+    if (!isObj(root)) {
+      throw new Error("Trusted root must be an object");
+    }
     const tlogs: unknown[] = Array.isArray(root.tlogs) ? root.tlogs : [];
     const logs = await Promise.all(tlogs.map(loadTrustedLog));
     const authorities: unknown[] = Array.isArray(root.timestampAuthorities) ? root.timestampAuthorities : [];
@@ -425,7 +445,9 @@ export class ManagedKeyVerifier {
     const { verifyDigest } = this.options;
     let verified: boolean;
     if (isDigestOnly) {
-      if (!verifyDigest) throw new Error("Digest-only verification needs the verifyDigest option");
+      if (!verifyDigest) {
+        throw new Error("Digest-only verification needs the verifyDigest option");
+      }
       verified = await step("message-signature-invalid", () => verifyDigest(cryptoKey, data, sig));
     } else {
       verified = await step("message-signature-invalid", () => verifySignature(cryptoKey, data, sig, key.hash));
@@ -443,7 +465,9 @@ export class ManagedKeyVerifier {
     verifyContent: (bundle: SigstoreBundle) => Promise<void>,
   ): Promise<{ bundle: SigstoreBundle; timestamps: Date[] }> {
     const logs = this.logs;
-    if (!logs) throw new Error("Trusted root is not loaded");
+    if (!logs) {
+      throw new Error("Trusted root is not loaded");
+    }
 
     const parsed = await this.parseBundle(input);
     checkSingleVariants(parsed);

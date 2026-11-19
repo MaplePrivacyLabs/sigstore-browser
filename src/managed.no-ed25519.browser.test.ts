@@ -9,7 +9,9 @@ removeNativeEd25519();
 const corpus = inject("corpus");
 const vector = (id: string) => {
   const v = corpus.managedKey.find((x) => x.id === id);
-  if (!v) throw new Error(`no vector ${id}`);
+  if (!v) {
+    throw new Error(`no vector ${id}`);
+  }
   return v;
 };
 

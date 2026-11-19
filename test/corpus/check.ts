@@ -31,21 +31,39 @@ const sha256 = async (data: Uint8Array) => new Uint8Array(await crypto.subtle.di
 // P-384). DSSE bundles keep SHA-256, matching their in-toto subject digests.
 const P256_ALGID = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 const P384_ALGID = [0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22];
-const hasCurve = (der: Uint8Array, algid: number[]) => {
-  outer: for (let i = 0; i + algid.length <= der.length; i++) {
-    for (let j = 0; j < algid.length; j++) if (der[i + j] !== algid[j]) continue outer;
-    return true;
+function hasCurve(der: Uint8Array, algorithmId: number[]): boolean {
+  for (let offset = 0; offset + algorithmId.length <= der.length; offset++) {
+    const matches = algorithmId.every((byte, index) => der[offset + index] === byte);
+    if (matches) {
+      return true;
+    }
   }
   return false;
-};
-const digestForVector = async (v: ManagedKeyVector, artifact: Uint8Array): Promise<Uint8Array> => {
-  if (!JSON.parse(v.bundle).messageSignature) return sha256(artifact);
-  const der = base64ToBytes(v.key.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""));
-  // Read the curve from the SPKI algorithm identifier: trial imports are not
-  // portable (some engines accept a P-256 key where P-384 is requested).
-  const name = hasCurve(der, P384_ALGID) ? "SHA-384" : hasCurve(der, P256_ALGID) ? "SHA-256" : (() => { throw new Error("unrecognized EC curve in SPKI"); })();
-  return new Uint8Array(await crypto.subtle.digest(name, artifact));
-};
+}
+
+function blobDigestAlgorithm(key: string): string {
+  const encodedKey = key.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+  const der = base64ToBytes(encodedKey);
+  // Trial imports are not portable: Firefox accepts a P-256 key requested as P-384.
+  if (hasCurve(der, P384_ALGID)) {
+    return "SHA-384";
+  }
+  if (hasCurve(der, P256_ALGID)) {
+    return "SHA-256";
+  }
+  throw new Error("unrecognized EC curve in SPKI");
+}
+
+async function digestForVector(vector: ManagedKeyVector, artifact: Uint8Array): Promise<Uint8Array> {
+  const bundle = JSON.parse(vector.bundle);
+  if (!bundle.messageSignature) {
+    return sha256(artifact);
+  }
+
+  const algorithm = blobDigestAlgorithm(vector.key);
+  const digest = await crypto.subtle.digest(algorithm, artifact);
+  return new Uint8Array(digest);
+}
 
 /**
  * Where the default (upstream-consistent) configuration intentionally differs from sigstore-rust's
@@ -104,7 +122,9 @@ export const DEFAULT_MODE_DIFFERENCES: Record<string, { expected: Expected; why:
 };
 
 export function expectedFor(v: ManagedKeyVector, mode: Mode): Expected {
-  if (mode === "strict") return v.expected.profile;
+  if (mode === "strict") {
+    return v.expected.profile;
+  }
   return DEFAULT_MODE_DIFFERENCES[v.id]?.expected ?? v.expected.library;
 }
 
@@ -113,8 +133,12 @@ const hasDsseEnvelope = (v: ManagedKeyVector): boolean => Boolean(JSON.parse(v.b
 
 // In "dsse" mode, messageSignature vectors are expected to be refused with content-unsupported;
 // the manifest records outcomes for the verifying paths only.
-const expectedForHow = (v: ManagedKeyVector, mode: Mode, how: How): Expected =>
-  how === "dsse" && !hasDsseEnvelope(v) ? { result: "reject", code: "content-unsupported" } : expectedFor(v, mode);
+function expectedForHow(v: ManagedKeyVector, mode: Mode, how: How): Expected {
+  if (how === "dsse" && !hasDsseEnvelope(v)) {
+    return { result: "reject", code: "content-unsupported" };
+  }
+  return expectedFor(v, mode);
+}
 
 async function outcome(fn: () => Promise<unknown>): Promise<Outcome> {
   try {
@@ -122,12 +146,15 @@ async function outcome(fn: () => Promise<unknown>): Promise<Outcome> {
     return { result: "accept" };
   } catch (e) {
     const err = e as { code?: unknown; message?: unknown };
-    return { result: "reject", code: typeof err.code === "string" ? err.code : undefined, message: String(err.message ?? e) };
+    const code = typeof err.code === "string" ? err.code : undefined;
+    const message = String(err.message ?? e);
+    return { result: "reject", code, message };
   }
 }
 
 export async function verifyManagedKeyVector(lib: Lib, v: ManagedKeyVector, mode: Mode, how: How): Promise<Outcome> {
-  const options = { ...(mode === "strict" ? lib.STRICT_MANAGED_KEY_PROFILE : {}), verifyDigest: verifySignatureOverDigest };
+  const profile = mode === "strict" ? lib.STRICT_MANAGED_KEY_PROFILE : {};
+  const options = { ...profile, verifyDigest: verifySignatureOverDigest };
   const verifier = new lib.ManagedKeyVerifier(options);
   await verifier.loadTrustedRoot(JSON.parse(v.root));
   return outcome(async () => {
@@ -156,12 +183,22 @@ export async function checkManagedKeyCorpus(lib: Lib, vectors: ManagedKeyVector[
     if (!matches(expected, actual)) mismatches.push({ id: v.id, how: `${mode}/${how}`, expected, actual });
   }
   for (const v of vectors) {
-    if (!v.parent) continue;
+    if (!v.parent) {
+      continue;
+    }
     // A messageSignature parent cannot be accepted by verifyDsse; skip the parent check there.
     const parent = byId.get(v.parent);
-    if (how === "dsse" && parent && !hasDsseEnvelope(parent)) continue;
+    if (how === "dsse" && parent && !hasDsseEnvelope(parent)) {
+      continue;
+    }
     if (outcomes.get(v.parent)?.result !== "accept") {
-      mismatches.push({ id: `${v.id} (parent ${v.parent})`, how: `${mode}/${how}`, expected: { result: "accept" }, actual: outcomes.get(v.parent) ?? { result: "reject" } });
+      const actual = outcomes.get(v.parent) ?? { result: "reject" };
+      mismatches.push({
+        id: `${v.id} (parent ${v.parent})`,
+        how: `${mode}/${how}`,
+        expected: { result: "accept" },
+        actual,
+      });
     }
   }
   return mismatches;

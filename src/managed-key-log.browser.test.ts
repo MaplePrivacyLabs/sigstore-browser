@@ -10,7 +10,9 @@ import { verifyTLogBody } from "./tlog/body.js";
 const corpus = inject("corpus");
 const vector = (id: string): ManagedKeyVector => {
   const v = corpus.managedKey.find((x) => x.id === id);
-  if (!v) throw new Error(`no vector ${id}`);
+  if (!v) {
+    throw new Error(`no vector ${id}`);
+  }
   return v;
 };
 
@@ -36,7 +38,9 @@ async function reason(check: () => unknown): Promise<string> {
     await check();
     return "accept";
   } catch (e) {
-    if (e instanceof VerificationError) return e.code;
+    if (e instanceof VerificationError) {
+      return e.code;
+    }
     throw e;
   }
 }

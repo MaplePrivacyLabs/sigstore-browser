@@ -19,8 +19,12 @@ async function reason(p: Promise<unknown>): Promise<string> {
     await p;
     return "accept";
   } catch (e) {
-    if (e instanceof VerificationError) return e.code;
-    if (e instanceof Error && "code" in e && typeof e.code === "string") return e.code;
+    if (e instanceof VerificationError) {
+      return e.code;
+    }
+    if (e instanceof Error && "code" in e && typeof e.code === "string") {
+      return e.code;
+    }
     throw e;
   }
 }
