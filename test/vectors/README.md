@@ -28,7 +28,8 @@ python3 test/vectors/managed-key/generate.py --check
 Each vector in `manifest.json` records three expectations:
 
 - `profile` is the shared contract: the outcome and reason code under the strict profile of
-  `PROFILE.md`. With `STRICT_MANAGED_KEY_PROFILE`, every vector must match it exactly.
+  `PROFILE.md`. Browser exceptions under `STRICT_MANAGED_KEY_PROFILE` are listed in
+  `STRICT_MODE_DIFFERENCES` in `test/corpus/check.ts`.
 - `library` and `library_checkpoint_log_binding` are sigstore-rust's behavior with its default
   options, without and with its checkpoint binding option. They are not requirements for this
   library.
@@ -36,3 +37,9 @@ Each vector in `manifest.json` records three expectations:
 With `ManagedKeyVerifier`'s default options this library follows its own certificate flow, so
 twelve vectors differ from sigstore-rust's `library` expectation. `DEFAULT_MODE_DIFFERENCES` in
 `test/corpus/check.ts` lists each one with its expected outcome here and the reason.
+
+The browser verifier uses `JSON.parse` and does not reject repeated JSON member names, even
+under the strict preset. The shared duplicate-envelope vector still expects the profile's
+`duplicate-json-key`; the browser instead rejects the last envelope's signature as
+`dsse-signature-invalid`. Callers that require the shared profile's duplicate-member rule must
+enforce it before calling the verifier. The shared corpus is not modified for this exception.

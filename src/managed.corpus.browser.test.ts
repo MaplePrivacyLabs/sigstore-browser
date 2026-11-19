@@ -1,11 +1,11 @@
 import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble";
 import { describe, expect, inject, it } from "vitest";
 
-import { checkConformance, checkManagedKeyCorpus, type How, type Lib, type Mode } from "../test/corpus/check.ts";
+import { checkConformance, checkManagedKeyCorpus, expectedFor, type How, type Lib, type Mode } from "../test/corpus/check.ts";
 import * as lib from "./index.js";
 
-// The vendored corpus, shared with sigstore-rust (test/vectors). In the strict profile every vector
-// must give the outcome and reason code recorded under "profile" in its manifest.
+// The shared corpus stays unchanged. Browser exceptions, including JSON.parse handling of repeated
+// member names, are recorded in test/corpus/check.ts.
 const corpus = inject("corpus");
 
 // Stand-ins for ManagedKeyVerifier, to show that the checks fail for a verifier that is wrong.
@@ -37,10 +37,13 @@ describe("managed-key corpus", () => {
     expect(corpus.managedKey).toHaveLength(56);
   });
 
-  it("records only reason codes this library reports", () => {
-    for (const v of corpus.managedKey) {
-      for (const expected of Object.values(v.expected)) {
-        if (expected.result === "reject") expect(lib.REASON_CODES).toContain(expected.code);
+  it("uses library reason codes for the browser expectations", () => {
+    for (const vector of corpus.managedKey) {
+      for (const mode of ["strict", "default"] as const) {
+        const expected = expectedFor(vector, mode);
+        if (expected.result === "reject") {
+          expect(lib.REASON_CODES).toContain(expected.code);
+        }
       }
     }
   });

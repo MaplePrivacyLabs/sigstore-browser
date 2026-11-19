@@ -136,7 +136,7 @@ key, there is no certificate or identity fallback, and a bundle carrying a certi
 rejected. A bundle or key that fails verification raises a `VerificationError` whose `code` is one
 of `REASON_CODES`. Misuse raises ordinary errors instead: invalid constructor options, verifying
 before a trusted root is loaded, a digest of the wrong length for the content and key, a digest-only
-`messageSignature` without `verifyDigest`, and a parsed bundle object while `rejectDuplicateKeys` is set.
+`messageSignature` without `verifyDigest`.
 
 By default the checks match the certificate flow: bundle v0.2 and v0.3; every entry from a trusted
 log fully verified (inclusion proof, checkpoint signed by that entry's log key with witness
@@ -156,12 +156,15 @@ sets each list to the value shown:
 | --- | --- |
 | `bundleVersions: ["0.3"]` | Only bundle v0.3 |
 | `requireCanonicalMediaType` | Only the canonical spelling `application/vnd.dev.sigstore.bundle.vX.Y+json`, not the legacy `application/vnd.dev.sigstore.bundle+json;version=X.Y` (with the line above: exactly `application/vnd.dev.sigstore.bundle.v0.3+json`) |
-| `rejectDuplicateKeys` | Reject JSON that repeats a member name anywhere (needs the bundle as text or bytes) |
 | `requireSingleTlogEntry` | Exactly one transparency log entry; an extra one fails, with or without a proof |
 | `allowedEntryKinds: ["hashedrekord/0.0.2"]` | Only Rekor v2 hashedrekord entries |
 | `rejectIntegratedTime`, `rejectInclusionPromise` | No Rekor v1 metadata on the entry, whatever its value |
 | `requireSingleTimestamp` | Exactly one RFC 3161 timestamp |
 | `checkpointOriginBinding` | Checkpoint origin and log signature line name must be the host of the entry's log `baseUrl`; entries naming an unknown log fail |
+
+Repeated JSON member names follow `JSON.parse` semantics: the last value wins, including under
+`STRICT_MANAGED_KEY_PROFILE`. Callers that prohibit repeated names must check the JSON before
+calling the verifier. Conflicting protobuf content or verification-material variants are still rejected.
 
 `maxBundleBytes` (default 16 MiB) bounds bundles passed as text or bytes before they are parsed.
 On runtimes without WebCrypto Ed25519 (Safari before 17), call `installEd25519Fallback()` from

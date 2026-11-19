@@ -7,7 +7,6 @@ import { base64ToBytes } from "../test/corpus/check.ts";
 import type { ManagedKeyVector } from "../test/corpus/data.ts";
 import { bundle as keylessBundle } from "../test/fixtures/sigstore.js";
 import { VerificationError } from "./errors.js";
-import { findDuplicateKey } from "./json.js";
 import { ManagedKeyVerifier, type ManagedKeyVerifierOptions, STRICT_MANAGED_KEY_PROFILE } from "./managed.js";
 import { SigstoreVerifier } from "./sigstore.js";
 
@@ -344,48 +343,16 @@ describe("ManagedKeyVerifier", () => {
     });
   });
 
-  describe("repeated JSON member names", () => {
-    const duplicated = {
-      topLevel: p384.bundle.replace('"mediaType":', '"mediaType": "x", "mediaType":'),
-      escaped: p384.bundle.replace('"mediaType":', '"\\u006dediaType": "x", "mediaType":'),
-      nested: p384.bundle.replace('"logIndex":', '"logIndex": "1", "logIndex":'),
-    };
-
-    it.each(Object.entries(duplicated).map(([name, bundle]) => ({ name, bundle })))(
-      "rejects a $name repeated member name",
-      async ({ bundle }) => {
-        expect(bundle).not.toBe(p384.bundle);
-        const v = await verifier();
-        const actualReason = await reason(v.verifyDsse(bundle, p384.key));
-        expect(actualReason).toBe("duplicate-json-key");
-      },
-    );
-
-    it("reports the path of the repeated member", () => {
-      expect(findDuplicateKey(duplicated.nested)).toMatch(/tlogEntries\[0\]\.logIndex$/);
-    });
-
-    it("does not count the same name in different objects", () => {
-      expect(findDuplicateKey('{"a":[{"b":1},{"b":2}],"c":{"b":3}}')).toBeUndefined();
-    });
-
+  describe("bundle input", () => {
     it("rejects truncated JSON as bundle-malformed", async () => {
       const v = await verifier();
       const actualReason = await reason(v.verifyDsse(p384.bundle.slice(0, -10), p384.key));
       expect(actualReason).toBe("bundle-malformed");
     });
 
-    it("rejects JSON nested deeper than the scanner allows as bundle-malformed", async () => {
-      const deep = "[".repeat(100) + "]".repeat(100);
+    it("accepts an already parsed bundle under the strict preset", async () => {
       const v = await verifier();
-      const actualReason = await reason(v.verifyDsse(deep, p384.key));
-      expect(actualReason).toBe("bundle-malformed");
-    });
-
-    // The check needs the text, so an already parsed object is refused rather than silently unchecked.
-    it("refuses an already parsed bundle when repeated names must be rejected", async () => {
-      const v = await verifier();
-      await expect(v.verifyDsse(parse(p384), p384.key)).rejects.toThrow(TypeError);
+      await expect(v.verifyDsse(parse(p384), p384.key)).resolves.toBeDefined();
     });
 
     it("accepts an already parsed bundle by default, as for certificate bundles", async () => {

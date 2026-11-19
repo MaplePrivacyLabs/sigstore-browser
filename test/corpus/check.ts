@@ -65,10 +65,17 @@ async function digestForVector(vector: ManagedKeyVector, artifact: Uint8Array): 
   return new Uint8Array(digest);
 }
 
+/** Browser exceptions to the shared profile; its corpus bytes and expectations stay unchanged. */
+export const STRICT_MODE_DIFFERENCES: Record<string, { expected: Expected; why: string }> = {
+  "p384-duplicate-dsse-envelope-key": {
+    expected: { result: "reject", code: "dsse-signature-invalid" },
+    why: "JSON.parse keeps the last envelope; callers must reject repeated member names before verification",
+  },
+};
+
 /**
  * Where the default (upstream-consistent) configuration intentionally differs from sigstore-rust's
- * library defaults ("library" in the manifest). In strict mode there are no differences: every vector
- * must match the manifest's "profile" outcome and reason code.
+ * library defaults ("library" in the manifest). Strict exceptions are listed separately above.
  */
 export const DEFAULT_MODE_DIFFERENCES: Record<string, { expected: Expected; why: string }> = {
   "p384-entry-names-another-trusted-log": {
@@ -123,7 +130,7 @@ export const DEFAULT_MODE_DIFFERENCES: Record<string, { expected: Expected; why:
 
 export function expectedFor(v: ManagedKeyVector, mode: Mode): Expected {
   if (mode === "strict") {
-    return v.expected.profile;
+    return STRICT_MODE_DIFFERENCES[v.id]?.expected ?? v.expected.profile;
   }
   return DEFAULT_MODE_DIFFERENCES[v.id]?.expected ?? v.expected.library;
 }

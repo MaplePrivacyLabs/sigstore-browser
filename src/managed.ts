@@ -28,7 +28,6 @@ import { assertBundle, DSSEEnvelope, InclusionProof, MessageSignature, SigstoreB
 import { preAuthEncoding } from "./dsse.js";
 import { fail, type ReasonCode, VerificationError } from "./errors.js";
 import { parseValidityPeriod, RawTimestampAuthority, RekorKeyInfo, TrustedRoot } from "./interfaces.js";
-import { findDuplicateKey } from "./json.js";
 import { ManagedPublicKey } from "./key.js";
 import { BUNDLE_VERSIONS, countOperators, getBundleVersion } from "./sigstore.js";
 import { verifyBundleTimestampForSignature } from "./timestamp/tsa.js";
@@ -65,8 +64,6 @@ export interface ManagedKeyVerifierOptions {
    */
   requireCanonicalMediaType?: boolean;
 
-  /** Reject JSON that repeats a member name in any object. The bundle must then be passed as text or bytes. */
-  rejectDuplicateKeys?: boolean;
   /** Require exactly one transparency log entry; an additional entry fails, with or without its own proof. */
   requireSingleTlogEntry?: boolean;
   /** Entry kinds to accept, as "kind/version" (for example ["hashedrekord/0.0.2"] for Rekor v2 only). */
@@ -100,15 +97,15 @@ function freezeOptions(options: ManagedKeyVerifierOptions): Readonly<ManagedKeyV
 }
 
 /**
- * Strict profile: the canonical v0.3 media type, unambiguous JSON, exactly one Rekor v2
+ * Strict profile: the canonical v0.3 media type, exactly one Rekor v2
  * hashedrekord entry without Rekor v1 metadata, exactly one RFC 3161 timestamp, and checkpoints
  * bound to the entry's log. It applies to DSSE and messageSignature content alike and places no
- * restriction on the content type. The object and its lists are frozen.
+ * restriction on the content type. Repeated JSON member names follow JSON.parse semantics; callers
+ * that prohibit them must check the input before verification. The object and its lists are frozen.
  */
 export const STRICT_MANAGED_KEY_PROFILE: Readonly<ManagedKeyVerifierOptions> = freezeOptions({
   bundleVersions: ["0.3"],
   requireCanonicalMediaType: true,
-  rejectDuplicateKeys: true,
   requireSingleTlogEntry: true,
   allowedEntryKinds: ["hashedrekord/0.0.2"],
   rejectIntegratedTime: true,
@@ -124,7 +121,7 @@ export interface ManagedKeyDsseResult {
   timestamps: Date[];
 }
 
-/** A bundle as JSON text, UTF-8 bytes, or an already parsed object (not with rejectDuplicateKeys). */
+/** A bundle as JSON text, UTF-8 bytes, or an already parsed object. */
 export type BundleInput = string | Uint8Array | SigstoreBundle;
 
 interface TrustedLog {
@@ -348,7 +345,7 @@ export class ManagedKeyVerifier {
    * Verifies a DSSE bundle signed with `publicKey` and returns its payload. The caller checks the
    * payload (for example the in-toto statement's subject and predicate). A bundle or key that fails
    * verification throws a VerificationError whose `code` is one of REASON_CODES; calling it before a
-   * trusted root is loaded, or with a parsed bundle under rejectDuplicateKeys, throws other errors.
+   * trusted root is loaded throws an ordinary error.
    *
    * @param publicKey PEM "PUBLIC KEY" or DER SubjectPublicKeyInfo of an ECDSA P-256 or P-384 key.
    */
@@ -504,7 +501,7 @@ export class ManagedKeyVerifier {
     return { bundle, timestamps };
   }
 
-  // Bounds the input, rejects repeated member names when configured to, and parses it.
+  // Bounds text and byte inputs before parsing them with JSON.parse.
   private async parseBundle(input: BundleInput): Promise<JsonObject> {
     let parsed: unknown;
     if (typeof input === "string" || input instanceof Uint8Array) {
@@ -526,17 +523,8 @@ export class ManagedKeyVerifier {
           return decoder.decode(input);
         });
       }
-      if (this.options.rejectDuplicateKeys) {
-        const duplicate = await step("bundle-malformed", () => findDuplicateKey(text));
-        if (duplicate !== undefined) {
-          fail("duplicate-json-key", `Bundle JSON repeats the member ${duplicate}`);
-        }
-      }
       parsed = await step("bundle-malformed", () => JSON.parse(text));
     } else {
-      if (this.options.rejectDuplicateKeys) {
-        throw new TypeError("rejectDuplicateKeys needs the bundle as JSON text or bytes");
-      }
       parsed = input;
     }
     if (!isObj(parsed)) {
