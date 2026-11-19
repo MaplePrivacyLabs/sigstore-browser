@@ -84,7 +84,6 @@ export const REASON_CODES = [
     // Bundle input and structure
     "bundle-too-large",
     "bundle-malformed",
-    "duplicate-json-key",
     "conflicting-oneof",
     "media-type-unsupported",
     "verification-material-unsupported",

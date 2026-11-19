@@ -17,8 +17,6 @@ export interface ManagedKeyVerifierOptions {
      * not the legacy application/vnd.dev.sigstore.bundle+json;version=X.Y.
      */
     requireCanonicalMediaType?: boolean;
-    /** Reject JSON that repeats a member name in any object. The bundle must then be passed as text or bytes. */
-    rejectDuplicateKeys?: boolean;
     /** Require exactly one transparency log entry; an additional entry fails, with or without its own proof. */
     requireSingleTlogEntry?: boolean;
     /** Entry kinds to accept, as "kind/version" (for example ["hashedrekord/0.0.2"] for Rekor v2 only). */
@@ -38,10 +36,11 @@ export interface ManagedKeyVerifierOptions {
     checkpointOriginBinding?: boolean;
 }
 /**
- * Strict profile: the canonical v0.3 media type, unambiguous JSON, exactly one Rekor v2
+ * Strict profile: the canonical v0.3 media type, exactly one Rekor v2
  * hashedrekord entry without Rekor v1 metadata, exactly one RFC 3161 timestamp, and checkpoints
  * bound to the entry's log. It applies to DSSE and messageSignature content alike and places no
- * restriction on the content type. The object and its lists are frozen.
+ * restriction on the content type. Repeated JSON member names follow JSON.parse semantics; callers
+ * that prohibit them must check the input before verification. The object and its lists are frozen.
  */
 export declare const STRICT_MANAGED_KEY_PROFILE: Readonly<ManagedKeyVerifierOptions>;
 export interface ManagedKeyDsseResult {
@@ -50,7 +49,7 @@ export interface ManagedKeyDsseResult {
     /** Times from the verified RFC 3161 timestamps. */
     timestamps: Date[];
 }
-/** A bundle as JSON text, UTF-8 bytes, or an already parsed object (not with rejectDuplicateKeys). */
+/** A bundle as JSON text, UTF-8 bytes, or an already parsed object. */
 export type BundleInput = string | Uint8Array | SigstoreBundle;
 export declare class ManagedKeyVerifier {
     private readonly options;
@@ -74,7 +73,7 @@ export declare class ManagedKeyVerifier {
      * Verifies a DSSE bundle signed with `publicKey` and returns its payload. The caller checks the
      * payload (for example the in-toto statement's subject and predicate). A bundle or key that fails
      * verification throws a VerificationError whose `code` is one of REASON_CODES; calling it before a
-     * trusted root is loaded, or with a parsed bundle under rejectDuplicateKeys, throws other errors.
+     * trusted root is loaded throws an ordinary error.
      *
      * @param publicKey PEM "PUBLIC KEY" or DER SubjectPublicKeyInfo of an ECDSA P-256 or P-384 key.
      */
