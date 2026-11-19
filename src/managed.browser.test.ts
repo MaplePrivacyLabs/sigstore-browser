@@ -1,3 +1,6 @@
+import { Uint8ArrayToBase64 } from "@freedomofpress/crypto-browser";
+import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble";
+import { p256 as nobleP256, p384 as nobleP384 } from "@noble/curves/nist.js";
 import { describe, expect, inject, it } from "vitest";
 
 import { base64ToBytes } from "../test/corpus/check.ts";
@@ -23,6 +26,7 @@ const vector = (id: string): ManagedKeyVector => {
 const p384 = vector("p384-rekor2-dsse-tsa");
 const otherP384 = vector("p384-rekor2-dsse-tsa-second-key");
 const p256 = vector("p256-rekor2-dsse-tsa");
+const v02 = vector("p384-media-type-v0.2");
 // The day the corpus bundles were signed and timestamped.
 const SIGNING_DAY = "2026-11-17";
 
@@ -58,6 +62,38 @@ async function verifier(options: ManagedKeyVerifierOptions = STRICT, root: Json 
   const v = new ManagedKeyVerifier(options);
   await v.loadTrustedRoot(root);
   return v;
+}
+
+const b64urlToBytes = (s: string) => {
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0));
+};
+
+/**
+ * A messageSignature grafted onto a real corpus bundle: the signature is freshly made, but the log
+ * entry still names the corpus key, so verification passes the content checks and then fails at the
+ * log entry with "tlog-key-mismatch". That makes the content checks observable without Rekor.
+ */
+async function messageSignatureFixture(source: ManagedKeyVector, curve: "P-256" | "P-384") {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: curve }, true, ["sign"]);
+  const keyBytes = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
+  const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+  const priv = b64urlToBytes(jwk.d ?? "");
+  const artifact = base64ToBytes(source.artifact);
+  const hash = curve === "P-384" ? "SHA-384" : "SHA-256";
+  const digest = new Uint8Array(await crypto.subtle.digest(hash, artifact));
+  const noble = curve === "P-384" ? nobleP384 : nobleP256;
+  const signature = noble.sign(digest, priv, { prehash: false, format: "der" });
+  const bundle = parse(source);
+  delete bundle.dsseEnvelope;
+  bundle.messageSignature = {
+    messageDigest: {
+      algorithm: curve === "P-384" ? "SHA2_384" : "SHA2_256",
+      digest: Uint8ArrayToBase64(digest),
+    },
+    signature: Uint8ArrayToBase64(signature),
+  };
+  return { bundle: text(bundle), artifact, digest, key: keyBytes };
 }
 
 // The reason code a verification fails with, or "accept".
@@ -415,12 +451,100 @@ describe("ManagedKeyVerifier", () => {
       expect(() => new ManagedKeyVerifier({ bundleVersions: ["0.4"] })).toThrow("bundleVersions");
     });
 
-    it("freezes the strict profile", () => {
+    it("freezes the strict profile and its lists", () => {
       expect(Object.isFrozen(STRICT_MANAGED_KEY_PROFILE)).toBe(true);
+      expect(Object.isFrozen(STRICT_MANAGED_KEY_PROFILE.bundleVersions)).toBe(true);
+      expect(Object.isFrozen(STRICT_MANAGED_KEY_PROFILE.allowedEntryKinds)).toBe(true);
+      expect(() => (STRICT_MANAGED_KEY_PROFILE.allowedEntryKinds as string[]).push("dsse/0.0.2")).toThrow(TypeError);
+      expect(() => (STRICT_MANAGED_KEY_PROFILE.bundleVersions as string[]).push("0.2")).toThrow(TypeError);
+    });
+
+    it("does not see later changes to the lists the caller kept", async () => {
+      const bundleVersions = ["0.3"];
+      const v = await verifier({ bundleVersions });
+      bundleVersions.push("0.2");
+      // Without its own copy, the verifier would accept the v0.2-labelled bundle.
+      expect(await reason(v.verifyDsse(v02.bundle, v02.key))).toBe("media-type-unsupported");
+    });
+
+    it("keeps its own options frozen after construction", async () => {
+      const v = await verifier({ ...STRICT_MANAGED_KEY_PROFILE });
+      const options = (v as unknown as { options: Record<string, unknown> }).options;
+      expect(Object.isFrozen(options)).toBe(true);
+      expect(Object.isFrozen(options.bundleVersions)).toBe(true);
+      expect(Object.isFrozen(options.allowedEntryKinds)).toBe(true);
+      expect(() => {
+        options.requireCanonicalMediaType = false;
+      }).toThrow(TypeError);
     });
 
     it("needs a trusted root", async () => {
       await expect(new ManagedKeyVerifier().verifyDsse(p384.bundle, p384.key)).rejects.toThrow("Trusted root is not loaded");
+    });
+  });
+
+  describe("messageSignature digests", () => {
+    it("verifies a P-384 messageSignature up to the log entry", async () => {
+      const { bundle, artifact, key } = await messageSignatureFixture(p384, "P-384");
+      expect(await reason((await verifier()).verifyArtifact(bundle, key, artifact))).toBe("tlog-key-mismatch");
+    });
+
+    it("verifies a P-256 messageSignature up to the log entry", async () => {
+      const { bundle, artifact, key } = await messageSignatureFixture(p256, "P-256");
+      expect(await reason((await verifier()).verifyArtifact(bundle, key, artifact))).toBe("tlog-key-mismatch");
+    });
+
+    it("accepts the key's own digest length for digest-only verification", async () => {
+      const { bundle, digest, key } = await messageSignatureFixture(p384, "P-384");
+      const v = await verifier({ ...DEFAULTS, verifyDigest: verifySignatureOverDigest });
+      expect(await reason(v.verifyArtifact(bundle, key, digest, true))).toBe("tlog-key-mismatch");
+    });
+
+    it("rejects a 32-byte digest for a P-384 key before calling verifyDigest", async () => {
+      const { bundle, digest, key } = await messageSignatureFixture(p384, "P-384");
+      const refuse = () => {
+        throw new Error("verifyDigest must not be called");
+      };
+      const v = await verifier({ ...DEFAULTS, verifyDigest: refuse as never });
+      await expect(v.verifyArtifact(bundle, key, digest.slice(0, 32), true)).rejects.toThrow(
+        "SHA-384 digest must be exactly 48 bytes",
+      );
+    });
+
+    it("rejects a 48-byte digest for a P-256 key", async () => {
+      const { bundle, digest, key } = await messageSignatureFixture(p256, "P-256");
+      const v = await verifier({ ...DEFAULTS, verifyDigest: verifySignatureOverDigest });
+      await expect(v.verifyArtifact(bundle, key, new Uint8Array(48), true)).rejects.toThrow(
+        "SHA-256 digest must be exactly 32 bytes",
+      );
+      expect(digest).toHaveLength(32);
+    });
+
+    it("rejects a digest that is the other algorithm's digest of the artifact", async () => {
+      const { bundle, key } = await messageSignatureFixture(p384, "P-384");
+      const artifact = base64ToBytes(p384.artifact);
+      const sha256 = new Uint8Array(await crypto.subtle.digest("SHA-256", artifact));
+      const swapped = JSON.parse(bundle);
+      swapped.messageSignature.messageDigest.digest = Uint8ArrayToBase64(sha256);
+      expect(await reason((await verifier()).verifyArtifact(JSON.stringify(swapped), key, artifact))).toBe(
+        "artifact-mismatch",
+      );
+    });
+
+    it("rejects the other algorithm's label even when the digest stays the key's own", async () => {
+      const { bundle, artifact, key } = await messageSignatureFixture(p384, "P-384");
+      const swapped = JSON.parse(bundle);
+      swapped.messageSignature.messageDigest.algorithm = "SHA2_256";
+      expect(await reason((await verifier()).verifyArtifact(JSON.stringify(swapped), key, artifact))).toBe(
+        "artifact-mismatch",
+      );
+    });
+
+    it("keeps DSSE digest-only verification at 32 bytes for a P-384 key", async () => {
+      const v = await verifier();
+      await expect(v.verifyArtifact(p384.bundle, p384.key, new Uint8Array(48), true)).rejects.toThrow(
+        "SHA-256 digest must be exactly 32 bytes",
+      );
     });
   });
 });

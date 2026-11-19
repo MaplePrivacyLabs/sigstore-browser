@@ -14,6 +14,7 @@
 
 import {
   base64ToUint8Array,
+  digest as digestBytes,
   importKey,
   sha256,
   stringToUint8Array,
@@ -50,7 +51,7 @@ export interface ManagedKeyVerifierOptions {
   /** Distinct timestamp authority operators whose timestamps must verify (default 0). */
   tsaThreshold?: number;
   /** Bundle versions to accept (default ["0.2", "0.3"], as for certificates). */
-  bundleVersions?: string[];
+  bundleVersions?: readonly string[];
   /** Needed only to verify a messageSignature over a digest: verifySignatureOverDigest from "@freedomofpress/crypto-browser/noble". */
   verifyDigest?: (key: CryptoKey, digest: Uint8Array, signature: Uint8Array) => Promise<boolean>;
   /** Largest bundle accepted as JSON text or bytes, checked before parsing (default 16 MiB). */
@@ -69,7 +70,7 @@ export interface ManagedKeyVerifierOptions {
   /** Require exactly one transparency log entry; an additional entry fails, with or without its own proof. */
   requireSingleTlogEntry?: boolean;
   /** Entry kinds to accept, as "kind/version" (for example ["hashedrekord/0.0.2"] for Rekor v2 only). */
-  allowedEntryKinds?: string[];
+  allowedEntryKinds?: readonly string[];
   /** Reject entries with an integratedTime member, whatever its value. Rekor v2 sets none. */
   rejectIntegratedTime?: boolean;
   /** Reject entries with an inclusionPromise (SET) member. Rekor v2 issues none. */
@@ -85,12 +86,26 @@ export interface ManagedKeyVerifierOptions {
   checkpointOriginBinding?: boolean;
 }
 
+// Copies an options object, lists included, and freezes the copy, so a verifier keeps the options it
+// was built with even if the caller mutates theirs (or the exported preset) afterwards.
+function freezeOptions(options: ManagedKeyVerifierOptions): Readonly<ManagedKeyVerifierOptions> {
+  const copy = { ...options };
+  if (copy.bundleVersions !== undefined) {
+    copy.bundleVersions = Object.freeze([...copy.bundleVersions]);
+  }
+  if (copy.allowedEntryKinds !== undefined) {
+    copy.allowedEntryKinds = Object.freeze([...copy.allowedEntryKinds]);
+  }
+  return Object.freeze(copy);
+}
+
 /**
- * Strict profile for managed-key DSSE bundles: exactly the canonical v0.3 media type, unambiguous JSON, exactly one Rekor v2
- * hashedrekord entry without Rekor v1 metadata, exactly one RFC 3161 timestamp, and checkpoints bound
- * to the entry's log.
+ * Strict profile: the canonical v0.3 media type, unambiguous JSON, exactly one Rekor v2
+ * hashedrekord entry without Rekor v1 metadata, exactly one RFC 3161 timestamp, and checkpoints
+ * bound to the entry's log. It applies to DSSE and messageSignature content alike and places no
+ * restriction on the content type. The object and its lists are frozen.
  */
-export const STRICT_MANAGED_KEY_PROFILE: Readonly<ManagedKeyVerifierOptions> = Object.freeze({
+export const STRICT_MANAGED_KEY_PROFILE: Readonly<ManagedKeyVerifierOptions> = freezeOptions({
   bundleVersions: ["0.3"],
   requireCanonicalMediaType: true,
   rejectDuplicateKeys: true,
@@ -240,7 +255,7 @@ function isRekorV2Entry(entry: TLogEntry): boolean {
 }
 
 export class ManagedKeyVerifier {
-  private readonly options: ManagedKeyVerifierOptions;
+  private readonly options: Readonly<ManagedKeyVerifierOptions>;
   private readonly tlogThreshold: number;
   private readonly tsaThreshold: number;
   private readonly bundleVersions: string[];
@@ -249,7 +264,7 @@ export class ManagedKeyVerifier {
   private timestampAuthorities: RawTimestampAuthority[] = [];
 
   constructor(options: ManagedKeyVerifierOptions = {}) {
-    this.options = { ...options };
+    this.options = freezeOptions(options);
     this.bundleVersions = [...(options.bundleVersions ?? ["0.2", "0.3"])];
     if (!this.bundleVersions.length || this.bundleVersions.some((v) => !BUNDLE_VERSIONS.includes(v))) {
       throw new Error(`bundleVersions must be a non-empty subset of ${BUNDLE_VERSIONS.join(", ")}`);
@@ -313,7 +328,8 @@ export class ManagedKeyVerifier {
   /**
    * Verifies a bundle signed with `publicKey` over `data`: a messageSignature over the artifact, or a
    * DSSE in-toto statement with a subject whose SHA-256 is the artifact's. With `isDigestOnly`, `data`
-   * is the artifact's 32-byte SHA-256 digest.
+   * is the artifact's digest: its SHA-256 digest for a DSSE statement, or the digest the key implies
+   * for a messageSignature (SHA-256 for P-256, SHA-384 for P-384).
    */
   async verifyArtifact(
     bundle: BundleInput,
@@ -322,10 +338,16 @@ export class ManagedKeyVerifier {
     isDigestOnly = false,
   ): Promise<true> {
     const key = ManagedPublicKey.from(publicKey);
-    if (isDigestOnly && data.byteLength !== 32) {
-      throw new Error("SHA-256 digest must be exactly 32 bytes");
-    }
     await this.verifyBundle(bundle, key, "artifact", async (parsed) => {
+      if (isDigestOnly) {
+        const isDsse = Boolean(parsed.dsseEnvelope);
+        const expected = isDsse ? 32 : key.digestLength;
+        if (data.byteLength !== expected) {
+          throw new Error(isDsse
+            ? "SHA-256 digest must be exactly 32 bytes"
+            : `${key.hash} digest must be exactly ${expected} bytes`);
+        }
+      }
       if (parsed.dsseEnvelope) {
         await this.verifyDsseSignature(parsed.dsseEnvelope, key);
         await this.verifySubject(parsed.dsseEnvelope, data, isDigestOnly);
@@ -375,8 +397,8 @@ export class ManagedKeyVerifier {
     data: Uint8Array,
     isDigestOnly: boolean,
   ): Promise<void> {
-    const digest = isDigestOnly ? data : await sha256(data);
-    if (messageDigest.algorithm !== "SHA2_256" || !uint8ArrayEqual(digest, base64ToUint8Array(messageDigest.digest))) {
+    const digest = isDigestOnly ? data : await digestBytes(key.hash, data);
+    if (messageDigest.algorithm !== key.digestAlgorithm || !uint8ArrayEqual(digest, base64ToUint8Array(messageDigest.digest))) {
       fail("artifact-mismatch", "Artifact digest does not match the bundle message digest");
     }
     const sig = base64ToUint8Array(signature);
