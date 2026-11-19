@@ -87,6 +87,7 @@ export class ManagedPublicKey {
 
   private constructor(spki: Uint8Array, curve: CurveInfo) {
     this.spki = spki;
+    // Snapshot the metadata: curveForKeyDetails exposes the shared table to callers.
     this.namedCurve = curve.namedCurve;
     this.hash = curve.hash;
     this.keyDetails = curve.keyDetails;
@@ -142,9 +143,14 @@ export class ManagedPublicKey {
   }
 
   get publicKey(): Promise<CryptoKey> {
-    this.cryptoKey ??= importKey(KeyTypes.Ecdsa, this.namedCurve, Uint8ArrayToBase64(this.spki)).catch(() =>
-      fail("key-unsupported", "Public key could not be imported"),
-    );
+    this.cryptoKey ??= this.importPublicKey();
     return this.cryptoKey;
+  }
+
+  private importPublicKey(): Promise<CryptoKey> {
+    const encodedKey = Uint8ArrayToBase64(this.spki);
+    return importKey(KeyTypes.Ecdsa, this.namedCurve, encodedKey).catch(() => {
+      fail("key-unsupported", "Public key could not be imported");
+    });
   }
 }

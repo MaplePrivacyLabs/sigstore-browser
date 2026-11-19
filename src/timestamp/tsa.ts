@@ -13,10 +13,10 @@
  * - Adds verifyBundleTimestamp for Sigstore bundle integration (new functionality)
  */
 
-import { base64ToUint8Array, uint8ArrayEqual } from "@freedomofpress/crypto-browser";
+import { base64ToUint8Array, uint8ArrayEqual, Uint8ArrayToHex } from "@freedomofpress/crypto-browser";
 
 import { assertTimestampVerificationData } from "../bundle.js";
-import { fail, VerificationError } from "../errors.js";
+import { errorMessage, fail, VerificationError } from "../errors.js";
 import { parseValidityPeriod, RawTimestampAuthority } from "../interfaces.js";
 import { RFC3161TimestampVerificationError } from "../rfc3161/error.js";
 import { RFC3161Timestamp } from "../rfc3161/index.js";
@@ -135,27 +135,7 @@ async function verifyTimestampForCA(
     throw new Error("Certificate authority missing certificate chain");
   }
 
-  const leafCert = X509Certificate.parse(
-    base64ToUint8Array(ca.certChain.certificates[0].rawBytes)
-  );
-  const signingTime = timestamp.signingTime;
-
-  const trustedCerts = ca.certChain.certificates
-    .slice(1)
-    .map(cert => X509Certificate.parse(base64ToUint8Array(cert.rawBytes)));
-
-  try {
-    const verifier = new CertificateChainVerifier({
-      untrustedCert: leafCert,
-      trustedCerts: trustedCerts,
-      timestamp: signingTime,
-    });
-    await verifier.verify();
-  } catch (e) {
-    throw new Error(`TSA certificate chain verification failed: ${errorMessage(e)}`);
-  }
-
-  const publicKey = await leafCert.publicKeyObj;
+  const publicKey = await verifiedAuthorityKey(ca, timestamp.signingTime);
 
   await timestamp.verify(data, publicKey);
 }
@@ -227,7 +207,8 @@ export async function verifyBundleTimestampForSignature(
   timestampAuthorities: RawTimestampAuthority[]
 ): Promise<VerifiedTimestamp[]> {
   assertTimestampVerificationData(timestampData);
-  const verified: Array<VerifiedTimestamp & { signerSerialNumber: string }> = [];
+  const verified: VerifiedTimestamp[] = [];
+  const seen = new Set<string>();
 
   for (const tsData of timestampData?.rfc3161Timestamps ?? []) {
     const timestamp = parseTimestamp(tsData.signedTimestamp);
@@ -239,28 +220,23 @@ export async function verifyBundleTimestampForSignature(
     });
     const authority = await findIssuingAuthority(timestamp, signature, candidates, signingTime);
 
-    // Match duplicates by the signing time and the signer's serial number.
-    const serialBytes = Array.from(timestamp.signerSerialNumber);
-    const serial = serialBytes.join(",");
-    const duplicate = verified.some((previous) => {
-      const sameTime = previous.signingTime.getTime() === signingTime.getTime();
-      const sameSigner = previous.signerSerialNumber === serial;
-      return sameTime && sameSigner;
-    });
-    if (duplicate) {
+    const identity = timestampIdentity(signingTime, timestamp.signerSerialNumber);
+    if (seen.has(identity)) {
       fail("timestamp-duplicate", "Duplicate TSA timestamp detected");
     }
-
+    seen.add(identity);
     const operator = authority.operator || "";
-    verified.push({ signingTime, operator, signerSerialNumber: serial });
+    verified.push({ signingTime, operator });
   }
 
-  return verified.map(({ signingTime, operator }) => ({ signingTime, operator }));
+  return verified;
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+// Duplicate timestamps have the same signing time and signer serial bytes; hex preserves byte equality.
+function timestampIdentity(signingTime: Date, serial: Uint8Array): string {
+  const milliseconds = signingTime.getTime();
+  const serialKey = Uint8ArrayToHex(serial);
+  return `${milliseconds}:${serialKey}`;
 }
 
 function parseTimestamp(signedTimestamp: string): RFC3161Timestamp {
@@ -309,7 +285,9 @@ async function findIssuingAuthority(
     }
   }
 
-  if (failure) throw failure;
+  if (failure) {
+    throw failure;
+  }
   throw new VerificationError(
     "timestamp-untrusted-authority",
     "RFC 3161 timestamp was not issued by a timestamp authority in the trusted root",

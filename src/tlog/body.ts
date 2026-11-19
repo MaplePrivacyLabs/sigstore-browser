@@ -12,7 +12,7 @@
 import { base64Decode, base64ToUint8Array, toDER, Uint8ArrayToString } from "@freedomofpress/crypto-browser";
 
 import type { SigstoreBundle, TLogEntry } from "../bundle.js";
-import { fail } from "../errors.js";
+import { errorMessage, fail } from "../errors.js";
 import { ManagedPublicKey } from "../key.js";
 import { X509Certificate } from "../x509/cert.js";
 import { verifyDSSEBody } from "./dsse.js";
@@ -39,10 +39,9 @@ export async function verifyTLogBody(
   const { kind, version } = entry.kindVersion;
 
   if (kind !== rekorEntry.kind || version !== rekorEntry.apiVersion) {
-    fail(
-      "tlog-entry-malformed",
-      `kind/version mismatch - expected: ${kind}/${version}, received: ${rekorEntry.kind}/${rekorEntry.apiVersion}`,
-    );
+    const expected = `${kind}/${version}`;
+    const received = `${rekorEntry.kind}/${rekorEntry.apiVersion}`;
+    fail("tlog-entry-malformed", `kind/version mismatch - expected: ${expected}, received: ${received}`);
   }
 
   switch (rekorEntry.kind) {
@@ -67,7 +66,9 @@ export function assertLoggedSigner(signer: LogSigner, encoded: unknown): void {
   }
   let logged: Uint8Array;
   try {
-    logged = toDER(Uint8ArrayToString(base64ToUint8Array(encoded)));
+    const bytes = base64ToUint8Array(encoded);
+    const pem = Uint8ArrayToString(bytes);
+    logged = toDER(pem);
   } catch {
     fail("tlog-entry-malformed", "TLog entry public key is not valid PEM");
   }
@@ -92,7 +93,8 @@ export function assertLoggedV2Verifier(signer: LogSigner, verifier: V2Verifier |
     return assertLoggedCertificate(signer, verifier?.x509Certificate?.rawBytes, false);
   }
   const rawBytes = verifier?.publicKey?.rawBytes;
-  if (verifier?.x509Certificate !== undefined || typeof rawBytes !== "string" || rawBytes === "") {
+  const recordsPublicKey = verifier?.x509Certificate === undefined && typeof rawBytes === "string" && rawBytes !== "";
+  if (!recordsPublicKey) {
     fail("tlog-key-mismatch", "TLog entry does not record a public key");
   }
   const logged = base64ToUint8Array(rawBytes);
@@ -136,7 +138,7 @@ function parseCanonicalBody(entry: TLogEntry): RekorEntry {
 
     return rekorEntry;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     fail("tlog-entry-malformed", `Failed to parse canonicalized body: ${message}`);
   }
 }
