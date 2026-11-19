@@ -93,7 +93,7 @@ type FrozenOptions = Readonly<ManagedKeyVerifierOptions> & {
 };
 
 function freezeOptions(options: ManagedKeyVerifierOptions): FrozenOptions {
-  const versions = options.bundleVersions ?? ["0.2", "0.3"];
+  const { bundleVersions: versions = ["0.2", "0.3"] } = options;
   const copy = { ...options, bundleVersions: Object.freeze([...versions]) };
   if (copy.allowedEntryKinds !== undefined) {
     copy.allowedEntryKinds = Object.freeze([...copy.allowedEntryKinds]);
