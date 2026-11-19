@@ -1,5 +1,7 @@
 // Runs the vendored vectors against the library and reports every outcome that differs from the
 // expected one. Runtime-agnostic (Node, Bun, browsers): it receives the library and the data.
+import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble";
+
 import type * as library from "../../src/index.ts";
 import type { ConformanceVector, Corpus, Expected, ManagedKeyVector } from "./data.ts";
 
@@ -24,6 +26,19 @@ export type How = "dsse" | "artifact" | "digest";
 
 export const base64ToBytes = (b64: string): Uint8Array => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 const sha256 = async (data: Uint8Array) => new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+
+// The digest a messageSignature signed: the hash the key implies (SHA-256 for P-256, SHA-384 for
+// P-384). DSSE bundles keep SHA-256, matching their in-toto subject digests.
+const digestForVector = async (v: ManagedKeyVector, artifact: Uint8Array): Promise<Uint8Array> => {
+  if (!JSON.parse(v.bundle).messageSignature) return sha256(artifact);
+  const der = base64ToBytes(v.key.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""));
+  try {
+    await crypto.subtle.importKey("spki", der, { name: "ECDSA", namedCurve: "P-384" }, false, ["verify"]);
+    return new Uint8Array(await crypto.subtle.digest("SHA-384", artifact));
+  } catch {
+    return sha256(artifact);
+  }
+};
 
 /**
  * Where the default (upstream-consistent) configuration intentionally differs from sigstore-rust's
@@ -86,6 +101,14 @@ export function expectedFor(v: ManagedKeyVector, mode: Mode): Expected {
   return DEFAULT_MODE_DIFFERENCES[v.id]?.expected ?? v.expected.library;
 }
 
+// A messageSignature bundle has no DSSE envelope, so verifyDsse must refuse it.
+const hasDsseEnvelope = (v: ManagedKeyVector): boolean => Boolean(JSON.parse(v.bundle).dsseEnvelope);
+
+// In "dsse" mode, messageSignature vectors are expected to be refused with content-unsupported;
+// the manifest records outcomes for the verifying paths only.
+const expectedForHow = (v: ManagedKeyVector, mode: Mode, how: How): Expected =>
+  how === "dsse" && !hasDsseEnvelope(v) ? { result: "reject", code: "content-unsupported" } : expectedFor(v, mode);
+
 async function outcome(fn: () => Promise<unknown>): Promise<Outcome> {
   try {
     await fn();
@@ -97,7 +120,7 @@ async function outcome(fn: () => Promise<unknown>): Promise<Outcome> {
 }
 
 export async function verifyManagedKeyVector(lib: Lib, v: ManagedKeyVector, mode: Mode, how: How): Promise<Outcome> {
-  const options = mode === "strict" ? { ...lib.STRICT_MANAGED_KEY_PROFILE } : {};
+  const options = { ...(mode === "strict" ? lib.STRICT_MANAGED_KEY_PROFILE : {}), verifyDigest: verifySignatureOverDigest };
   const verifier = new lib.ManagedKeyVerifier(options);
   await verifier.loadTrustedRoot(JSON.parse(v.root));
   return outcome(async () => {
@@ -105,7 +128,8 @@ export async function verifyManagedKeyVector(lib: Lib, v: ManagedKeyVector, mode
       await verifier.verifyDsse(v.bundle, v.key);
     } else {
       const artifact = base64ToBytes(v.artifact);
-      await verifier.verifyArtifact(v.bundle, v.key, how === "digest" ? await sha256(artifact) : artifact, how === "digest");
+      const data = how === "digest" ? await digestForVector(v, artifact) : artifact;
+      await verifier.verifyArtifact(v.bundle, v.key, data, how === "digest");
     }
   });
 }
@@ -117,14 +141,19 @@ const matches = (expected: Expected, actual: Outcome) =>
 export async function checkManagedKeyCorpus(lib: Lib, vectors: ManagedKeyVector[], mode: Mode, how: How): Promise<Mismatch[]> {
   const mismatches: Mismatch[] = [];
   const outcomes = new Map<string, Outcome>();
+  const byId = new Map(vectors.map((v) => [v.id, v]));
   for (const v of vectors) {
     const actual = await verifyManagedKeyVector(lib, v, mode, how);
     outcomes.set(v.id, actual);
-    const expected = expectedFor(v, mode);
+    const expected = expectedForHow(v, mode, how);
     if (!matches(expected, actual)) mismatches.push({ id: v.id, how: `${mode}/${how}`, expected, actual });
   }
   for (const v of vectors) {
-    if (v.parent && outcomes.get(v.parent)?.result !== "accept") {
+    if (!v.parent) continue;
+    // A messageSignature parent cannot be accepted by verifyDsse; skip the parent check there.
+    const parent = byId.get(v.parent);
+    if (how === "dsse" && parent && !hasDsseEnvelope(parent)) continue;
+    if (outcomes.get(v.parent)?.result !== "accept") {
       mismatches.push({ id: `${v.id} (parent ${v.parent})`, how: `${mode}/${how}`, expected: { result: "accept" }, actual: outcomes.get(v.parent) ?? { result: "reject" } });
     }
   }

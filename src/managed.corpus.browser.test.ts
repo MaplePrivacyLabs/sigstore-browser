@@ -33,8 +33,8 @@ describe("managed-key corpus", () => {
   const rejected = corpus.managedKey.filter((v) => v.expected.profile.result === "reject").length;
   const accepted = corpus.managedKey.length - rejected;
 
-  it("has all 44 vectors", () => {
-    expect(corpus.managedKey).toHaveLength(44);
+  it("has all 50 vectors", () => {
+    expect(corpus.managedKey).toHaveLength(50);
   });
 
   it("records only reason codes this library reports", () => {
@@ -47,7 +47,11 @@ describe("managed-key corpus", () => {
 
   it("catches a verifier that accepts everything", async () => {
     const mismatches = await checkManagedKeyCorpus(withVerifier(AcceptAll), corpus.managedKey, "strict", "dsse");
-    expect(mismatches).toHaveLength(rejected);
+    // Every profile-rejecting vector, plus every messageSignature vector, which verifyDsse must refuse.
+    const refused = corpus.managedKey.filter(
+      (v) => !JSON.parse(v.bundle).dsseEnvelope || v.expected.profile.result === "reject",
+    );
+    expect(mismatches).toHaveLength(refused.length);
   });
 
   it("catches a verifier that rejects for another reason", async () => {
@@ -55,6 +59,7 @@ describe("managed-key corpus", () => {
     // Every vector, plus each negative whose parent is now rejected.
     expect(mismatches.length).toBeGreaterThanOrEqual(rejected + accepted);
   });
+
 
   it.each(CONFIGURATIONS)("%s configuration, %s", async (mode, how) => {
     expect(await checkManagedKeyCorpus(lib, corpus.managedKey, mode, how)).toEqual([]);

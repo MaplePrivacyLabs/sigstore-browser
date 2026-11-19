@@ -2,7 +2,7 @@
 
 | Directory | Contents |
 | --- | --- |
-| `managed-key/` | Managed-key DSSE / Rekor v2 / RFC 3161 corpus: real Cosign v3.1.4 bundles and single-mutation negatives, with `manifest.json` (expected outcome and reason code per vector), `PROFILE.md` (the strict profile) and the generator |
+| `managed-key/` | Managed-key DSSE and blob / Rekor v2 / RFC 3161 corpus: real Cosign v3.1.4 bundles and single-mutation negatives, with `manifest.json` (expected outcome and reason code per vector), `PROFILE.md` (the strict profile) and the generator |
 | `sigstore-conformance/` | `bundle-verify/` from sigstore-conformance v0.0.29, unmodified; its README says how it is run here |
 
 `test/corpus/data.ts` loads both. `test/corpus/check.ts` runs them against the library in
@@ -13,14 +13,14 @@
 
 `managed-key/` is copied byte for byte from `test-vectors/managed-key` in
 <https://github.com/MaplePrivacyLabs/sigstore-rust>, a sigstore-rust fork that holds the original,
-at commit `b46a60a32c856d6964f60c23cb78aedee532e2aa`. Paths in `managed-key/README.md` that name
+at commit `7f23f0d5f63ff0806e3e91f2b783fb5a59074fd2`. Paths in `managed-key/README.md` that name
 Rust files refer to that repository, and "this library" there means sigstore-rust. Do not edit the
 directory here. To compare it with its source and check that it regenerates (Python 3 and the
 OpenSSL 3.2+ command line):
 
 ```sh
 git clone https://github.com/MaplePrivacyLabs/sigstore-rust
-git -C sigstore-rust checkout b46a60a32c856d6964f60c23cb78aedee532e2aa
+git -C sigstore-rust checkout 7f23f0d5f63ff0806e3e91f2b783fb5a59074fd2
 diff -r sigstore-rust/test-vectors/managed-key test/vectors/managed-key
 python3 test/vectors/managed-key/generate.py --check
 ```
