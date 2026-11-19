@@ -1,6 +1,5 @@
 import { Uint8ArrayToBase64 } from "@freedomofpress/crypto-browser";
 import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble";
-import { p256 as nobleP256, p384 as nobleP384 } from "@noble/curves/nist.js";
 import { describe, expect, inject, it } from "vitest";
 
 import { base64ToBytes } from "../test/corpus/check.ts";
@@ -65,36 +64,13 @@ async function verifier(options: ManagedKeyVerifierOptions = STRICT, root: Json 
   return v;
 }
 
-const b64urlToBytes = (s: string) => {
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
-  return Uint8Array.from(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0));
-};
-
-/**
- * A messageSignature grafted onto a real corpus bundle: the signature is freshly made, but the log
- * entry still names the corpus key, so verification passes the content checks and then fails at the
- * log entry with "tlog-key-mismatch". That makes the content checks observable without Rekor.
- */
-async function messageSignatureFixture(source: ManagedKeyVector, curve: "P-256" | "P-384") {
-  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: curve }, true, ["sign"]);
-  const keyBytes = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
-  const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
-  const priv = b64urlToBytes(jwk.d ?? "");
+/** Real Cosign blob bundles, including their Rekor entries and timestamps. */
+async function messageSignatureFixture(curve: "P-256" | "P-384") {
+  const source = vector(curve === "P-384" ? "p384-rekor2-blob-tsa" : "p256-rekor2-blob-tsa");
   const artifact = base64ToBytes(source.artifact);
   const hash = curve === "P-384" ? "SHA-384" : "SHA-256";
   const digest = new Uint8Array(await crypto.subtle.digest(hash, artifact));
-  const noble = curve === "P-384" ? nobleP384 : nobleP256;
-  const signature = noble.sign(digest, priv, { prehash: false, format: "der" });
-  const bundle = parse(source);
-  delete bundle.dsseEnvelope;
-  bundle.messageSignature = {
-    messageDigest: {
-      algorithm: curve === "P-384" ? "SHA2_384" : "SHA2_256",
-      digest: Uint8ArrayToBase64(digest),
-    },
-    signature: Uint8ArrayToBase64(signature),
-  };
-  return { bundle: text(bundle), artifact, digest, key: keyBytes };
+  return { bundle: source.bundle, artifact, digest, key: source.key };
 }
 
 // The reason code a verification fails with, or "accept".
@@ -500,29 +476,29 @@ describe("ManagedKeyVerifier", () => {
   });
 
   describe("messageSignature digests", () => {
-    it("verifies a P-384 messageSignature up to the log entry", async () => {
-      const { bundle, artifact, key } = await messageSignatureFixture(p384, "P-384");
+    it("verifies a real P-384 messageSignature bundle", async () => {
+      const { bundle, artifact, key } = await messageSignatureFixture("P-384");
       const v = await verifier();
       const actualReason = await reason(v.verifyArtifact(bundle, key, artifact));
-      expect(actualReason).toBe("tlog-key-mismatch");
+      expect(actualReason).toBe("accept");
     });
 
-    it("verifies a P-256 messageSignature up to the log entry", async () => {
-      const { bundle, artifact, key } = await messageSignatureFixture(p256, "P-256");
+    it("verifies a real P-256 messageSignature bundle", async () => {
+      const { bundle, artifact, key } = await messageSignatureFixture("P-256");
       const v = await verifier();
       const actualReason = await reason(v.verifyArtifact(bundle, key, artifact));
-      expect(actualReason).toBe("tlog-key-mismatch");
+      expect(actualReason).toBe("accept");
     });
 
     it("accepts the key's own digest length for digest-only verification", async () => {
-      const { bundle, digest, key } = await messageSignatureFixture(p384, "P-384");
+      const { bundle, digest, key } = await messageSignatureFixture("P-384");
       const v = await verifier({ ...DEFAULTS, verifyDigest: verifySignatureOverDigest });
       const actualReason = await reason(v.verifyArtifact(bundle, key, digest, true));
-      expect(actualReason).toBe("tlog-key-mismatch");
+      expect(actualReason).toBe("accept");
     });
 
     it("rejects a 32-byte digest for a P-384 key before calling verifyDigest", async () => {
-      const { bundle, digest, key } = await messageSignatureFixture(p384, "P-384");
+      const { bundle, digest, key } = await messageSignatureFixture("P-384");
       const refuse = () => {
         throw new Error("verifyDigest must not be called");
       };
@@ -533,7 +509,7 @@ describe("ManagedKeyVerifier", () => {
     });
 
     it("rejects a 48-byte digest for a P-256 key", async () => {
-      const { bundle, digest, key } = await messageSignatureFixture(p256, "P-256");
+      const { bundle, digest, key } = await messageSignatureFixture("P-256");
       const v = await verifier({ ...DEFAULTS, verifyDigest: verifySignatureOverDigest });
       await expect(v.verifyArtifact(bundle, key, new Uint8Array(48), true)).rejects.toThrow(
         "SHA-256 digest must be exactly 32 bytes",
@@ -542,8 +518,7 @@ describe("ManagedKeyVerifier", () => {
     });
 
     it("rejects a digest that is the other algorithm's digest of the artifact", async () => {
-      const { bundle, key } = await messageSignatureFixture(p384, "P-384");
-      const artifact = base64ToBytes(p384.artifact);
+      const { bundle, artifact, key } = await messageSignatureFixture("P-384");
       const sha256 = new Uint8Array(await crypto.subtle.digest("SHA-256", artifact));
       const swapped = JSON.parse(bundle);
       swapped.messageSignature.messageDigest.digest = Uint8ArrayToBase64(sha256);
@@ -555,7 +530,7 @@ describe("ManagedKeyVerifier", () => {
     });
 
     it("rejects the other algorithm's label even when the digest stays the key's own", async () => {
-      const { bundle, artifact, key } = await messageSignatureFixture(p384, "P-384");
+      const { bundle, artifact, key } = await messageSignatureFixture("P-384");
       const swapped = JSON.parse(bundle);
       swapped.messageSignature.messageDigest.algorithm = "SHA2_256";
       const v = await verifier();
