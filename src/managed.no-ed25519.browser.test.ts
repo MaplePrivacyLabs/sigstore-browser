@@ -1,5 +1,6 @@
 import { describe, expect, inject, it } from "vitest";
 
+import { vector } from "../test/helpers.ts";
 import { removeNativeEd25519 } from "../test/no-ed25519.ts";
 
 // No native Ed25519 and no fallback installed: every Ed25519 key in a trusted root fails to load.
@@ -7,17 +8,10 @@ import { removeNativeEd25519 } from "../test/no-ed25519.ts";
 removeNativeEd25519();
 
 const corpus = inject("corpus");
-const vector = (id: string) => {
-  const v = corpus.managedKey.find((x) => x.id === id);
-  if (!v) {
-    throw new Error(`no vector ${id}`);
-  }
-  return v;
-};
 
 describe("a trusted root with keys this runtime cannot load", () => {
   // Test root: two Ed25519 Rekor v2 logs (unloadable here) and one ECDSA Rekor v1 log.
-  const rekorV1 = vector("p384-rekor1-dsse-synthetic");
+  const rekorV1 = vector(corpus.managedKey, "p384-rekor1-dsse-synthetic");
   const root = JSON.parse(rekorV1.root);
 
   it("has two Ed25519 logs", () => {
@@ -39,7 +33,7 @@ describe("a trusted root with keys this runtime cannot load", () => {
     const verifier = new ManagedKeyVerifier();
     await verifier.loadTrustedRoot(root);
 
-    const rekorV2 = vector("p384-relogged");
+    const rekorV2 = vector(corpus.managedKey, "p384-relogged");
     const error = await verifier.verifyDsse(rekorV2.bundle, rekorV2.key).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(VerificationError);
     expect((error as InstanceType<typeof VerificationError>).code).toBe("tlog-log-key-unsupported");

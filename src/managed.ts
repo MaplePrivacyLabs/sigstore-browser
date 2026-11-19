@@ -355,9 +355,10 @@ export class ManagedKeyVerifier {
       this.verifyDsseSignature(dsseEnvelope(parsed), key),
     );
     const env = dsseEnvelope(verified.bundle);
+    const payload = base64ToUint8Array(env.payload);
     return {
       payloadType: env.payloadType,
-      payload: base64ToUint8Array(env.payload),
+      payload,
       timestamps: verified.timestamps,
     };
   }
@@ -438,9 +439,13 @@ export class ManagedKeyVerifier {
       if (digestCount > MAX_SUBJECT_DIGESTS) {
         fail("artifact-mismatch", invalidDigests);
       }
-      if (matched) continue;
+      if (matched) {
+        continue;
+      }
       const subjectDigest = digests.sha256;
-      if (typeof subjectDigest !== "string") continue;
+      if (typeof subjectDigest !== "string") {
+        continue;
+      }
       const normalizedDigest = subjectDigest.toLowerCase();
       matched = artifactDigest === normalizedDigest;
     }

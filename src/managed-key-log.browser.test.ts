@@ -1,24 +1,17 @@
 import { describe, expect, inject, it } from "vitest";
 
 import type { ManagedKeyVector } from "../test/corpus/data.ts";
-import { VerificationError } from "./errors.js";
+import { base64ToBytes, reason, vector } from "../test/helpers.ts";
 import { ManagedPublicKey } from "./key.js";
 import { verifyTLogBody } from "./tlog/body.js";
 
 // Log entry bodies from the vendored corpus, checked directly against a caller's key: the binding
 // of the logged key, key details, digest algorithm and length, signature and digest.
 const corpus = inject("corpus");
-const vector = (id: string): ManagedKeyVector => {
-  const v = corpus.managedKey.find((x) => x.id === id);
-  if (!v) {
-    throw new Error(`no vector ${id}`);
-  }
-  return v;
-};
 
-const p384 = vector("p384-rekor2-dsse-tsa");
-const otherP384 = vector("p384-rekor2-dsse-tsa-second-key");
-const p256 = vector("p256-rekor2-dsse-tsa");
+const p384 = vector(corpus.managedKey, "p384-rekor2-dsse-tsa");
+const otherP384 = vector(corpus.managedKey, "p384-rekor2-dsse-tsa-second-key");
+const p256 = vector(corpus.managedKey, "p256-rekor2-dsse-tsa");
 
 const BODY_CODES = new Set([
   "tlog-key-mismatch",
@@ -29,25 +22,16 @@ const BODY_CODES = new Set([
   "tlog-signature-mismatch",
 ]);
 
-const base64ToBytes = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-const pemToDer = (pem: string) => base64ToBytes(pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s/g, ""));
-
-// The reason code a check fails with, or "accept".
-async function reason(check: () => unknown): Promise<string> {
-  try {
-    await check();
-    return "accept";
-  } catch (e) {
-    if (e instanceof VerificationError) {
-      return e.code;
-    }
-    throw e;
-  }
+function pemToDer(pem: string): Uint8Array {
+  const encodedKey = pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s/g, "");
+  return base64ToBytes(encodedKey);
 }
 
 function verifyBody(v: ManagedKeyVector, key = v.key) {
   const bundle = JSON.parse(v.bundle);
-  return reason(() => verifyTLogBody(bundle.verificationMaterial.tlogEntries[0], bundle, ManagedPublicKey.from(key)));
+  const entry = bundle.verificationMaterial.tlogEntries[0];
+  const signer = ManagedPublicKey.from(key);
+  return reason(() => verifyTLogBody(entry, bundle, signer));
 }
 
 describe("ManagedPublicKey", () => {
@@ -59,7 +43,10 @@ describe("ManagedPublicKey", () => {
   });
 
   it("reads the same key from DER SubjectPublicKeyInfo", () => {
-    expect(ManagedPublicKey.from(pemToDer(p384.key)).spki).toEqual(ManagedPublicKey.from(p384.key).spki);
+    const der = pemToDer(p384.key);
+    const keyFromDer = ManagedPublicKey.from(der);
+    const keyFromPem = ManagedPublicKey.from(p384.key);
+    expect(keyFromDer.spki).toEqual(keyFromPem.spki);
   });
 
   it("reads a P-256 key", () => {
@@ -82,7 +69,9 @@ describe("transparency log body checks with a managed key", () => {
   it.each(["p384-rekor2-dsse-tsa", "p256-rekor2-dsse-tsa", "p384-rekor1-dsse-synthetic"])(
     "binds the %s entry to its bundle and key",
     async (id) => {
-      expect(await verifyBody(vector(id))).toBe("accept");
+      const fixture = vector(corpus.managedKey, id);
+      const actualReason = await verifyBody(fixture);
+      expect(actualReason).toBe("accept");
     },
   );
 
@@ -91,13 +80,24 @@ describe("transparency log body checks with a managed key", () => {
   });
 
   // Every corpus vector whose first failing check is a body check fails it here too.
-  const bodyNegatives = corpus.managedKey.flatMap((v) => {
-    const { profile } = v.expected;
-    return profile.result === "reject" && BODY_CODES.has(profile.code) ? [{ id: v.id, code: profile.code, v }] : [];
+  const bodyVectors = corpus.managedKey.filter((candidate) => {
+    const profile = candidate.expected.profile;
+    if (profile.result !== "reject") {
+      return false;
+    }
+    return BODY_CODES.has(profile.code);
+  });
+  const bodyNegatives = bodyVectors.map((v) => {
+    const profile = v.expected.profile;
+    if (profile.result !== "reject") {
+      throw new Error("expected a rejecting body vector");
+    }
+    return { id: v.id, code: profile.code, v };
   });
 
   it("has corpus vectors for every body check", () => {
-    expect(new Set(bodyNegatives.map(({ code }) => code))).toEqual(BODY_CODES);
+    const codes = bodyNegatives.map((negative) => negative.code);
+    expect(new Set(codes)).toEqual(BODY_CODES);
   });
 
   it.each(bodyNegatives)("rejects $id as $code", async ({ code, v }) => {

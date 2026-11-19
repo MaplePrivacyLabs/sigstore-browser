@@ -2,10 +2,9 @@ import { Uint8ArrayToBase64 } from "@freedomofpress/crypto-browser";
 import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble";
 import { describe, expect, inject, it } from "vitest";
 
-import { base64ToBytes } from "../test/corpus/check.ts";
 import type { ManagedKeyVector } from "../test/corpus/data.ts";
 import { bundle as keylessBundle } from "../test/fixtures/sigstore.js";
-import { VerificationError } from "./errors.js";
+import { base64ToBytes, reason, vector } from "../test/helpers.ts";
 import { ManagedKeyVerifier, type ManagedKeyVerifierOptions, STRICT_MANAGED_KEY_PROFILE } from "./managed.js";
 import { SigstoreVerifier } from "./sigstore.js";
 
@@ -15,18 +14,11 @@ import { SigstoreVerifier } from "./sigstore.js";
 type Json = any;
 
 const corpus = inject("corpus");
-const vector = (id: string): ManagedKeyVector => {
-  const v = corpus.managedKey.find((x) => x.id === id);
-  if (!v) {
-    throw new Error(`no vector ${id}`);
-  }
-  return v;
-};
 
-const p384 = vector("p384-rekor2-dsse-tsa");
-const otherP384 = vector("p384-rekor2-dsse-tsa-second-key");
-const p256 = vector("p256-rekor2-dsse-tsa");
-const v02 = vector("p384-media-type-v0.2");
+const p384 = vector(corpus.managedKey, "p384-rekor2-dsse-tsa");
+const otherP384 = vector(corpus.managedKey, "p384-rekor2-dsse-tsa-second-key");
+const p256 = vector(corpus.managedKey, "p256-rekor2-dsse-tsa");
+const v02 = vector(corpus.managedKey, "p384-media-type-v0.2");
 // The day the corpus bundles were signed and timestamped.
 const SIGNING_DAY = "2026-11-17";
 
@@ -66,24 +58,12 @@ async function verifier(options: ManagedKeyVerifierOptions = STRICT, root: Json 
 
 /** Real Cosign blob bundles, including their Rekor entries and timestamps. */
 async function messageSignatureFixture(curve: "P-256" | "P-384") {
-  const source = vector(curve === "P-384" ? "p384-rekor2-blob-tsa" : "p256-rekor2-blob-tsa");
+  const id = curve === "P-384" ? "p384-rekor2-blob-tsa" : "p256-rekor2-blob-tsa";
+  const source = vector(corpus.managedKey, id);
   const artifact = base64ToBytes(source.artifact);
   const hash = curve === "P-384" ? "SHA-384" : "SHA-256";
   const digest = new Uint8Array(await crypto.subtle.digest(hash, artifact));
-  return { bundle: source.bundle, artifact, digest, key: source.key };
-}
-
-// The reason code a verification fails with, or "accept".
-async function reason(p: Promise<unknown>): Promise<string> {
-  try {
-    await p;
-    return "accept";
-  } catch (e) {
-    if (e instanceof VerificationError) {
-      return e.code;
-    }
-    throw e;
-  }
+  return { source, artifact, digest };
 }
 
 /**
@@ -107,7 +87,11 @@ function rootWithUnusableKeys(): Json {
     {
       ...structuredClone(log),
       logId: { keyId: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=" },
-      publicKey: { rawBytes: "!!!", keyDetails: "PKIX_ECDSA_P256_SHA_256", validFor: { start: "2026-01-01T00:00:00Z" } },
+      publicKey: {
+        rawBytes: "!!!",
+        keyDetails: "PKIX_ECDSA_P256_SHA_256",
+        validFor: { start: "2026-01-01T00:00:00Z" },
+      },
     },
     {
       ...structuredClone(log),
@@ -121,7 +105,11 @@ function rootWithUnusableKeys(): Json {
     ...stagingRoot.ctlogs.filter((l: Json) => l.publicKey.keyDetails === "PKCS1_RSA_PKCS1V5"),
     {
       ...structuredClone(ctLog),
-      publicKey: { rawBytes: "AAAA", keyDetails: "PKIX_ECDSA_P256_SHA_256", validFor: { start: "2021-01-01T00:00:00Z" } },
+      publicKey: {
+        rawBytes: "AAAA",
+        keyDetails: "PKIX_ECDSA_P256_SHA_256",
+        validFor: { start: "2021-01-01T00:00:00Z" },
+      },
     },
   );
   root.timestampAuthorities.push(
@@ -427,7 +415,11 @@ describe("ManagedKeyVerifier", () => {
     const numericOptions = ["tlogThreshold", "tsaThreshold", "maxBundleBytes"] as const;
     const invalidNumbers = [-1, 0.5, NaN, Infinity];
 
-    it.each(numericOptions.flatMap((key) => invalidNumbers.map((value) => ({ key, value }))))(
+    const invalidLimits = numericOptions.flatMap((key) =>
+      invalidNumbers.map((value) => ({ key, value })),
+    );
+
+    it.each(invalidLimits)(
       "rejects $key = $value",
       ({ key, value }) => {
         expect(() => new ManagedKeyVerifier({ [key]: value })).toThrow("non-negative safe integer");
@@ -459,6 +451,15 @@ describe("ManagedKeyVerifier", () => {
       expect(actualReason).toBe("media-type-unsupported");
     });
 
+    it("copies the caller's allowedEntryKinds list", async () => {
+      const allowedEntryKinds = ["dsse/0.0.2"];
+      const v = await verifier({ allowedEntryKinds });
+      allowedEntryKinds.push("hashedrekord/0.0.2");
+
+      const actualReason = await reason(v.verifyDsse(p384.bundle, p384.key));
+      expect(actualReason).toBe("tlog-entry-kind");
+    });
+
     it("keeps its own options frozen after construction", async () => {
       const v = await verifier({ ...STRICT_MANAGED_KEY_PROFILE });
       const options = (v as unknown as { options: Record<string, unknown> }).options;
@@ -471,70 +472,71 @@ describe("ManagedKeyVerifier", () => {
     });
 
     it("needs a trusted root", async () => {
-      await expect(new ManagedKeyVerifier().verifyDsse(p384.bundle, p384.key)).rejects.toThrow("Trusted root is not loaded");
+      const v = new ManagedKeyVerifier();
+      const verification = v.verifyDsse(p384.bundle, p384.key);
+      await expect(verification).rejects.toThrow("Trusted root is not loaded");
     });
   });
 
   describe("messageSignature digests", () => {
     it("verifies a real P-384 messageSignature bundle", async () => {
-      const { bundle, artifact, key } = await messageSignatureFixture("P-384");
+      const { source, artifact } = await messageSignatureFixture("P-384");
       const v = await verifier();
-      const actualReason = await reason(v.verifyArtifact(bundle, key, artifact));
+      const actualReason = await reason(v.verifyArtifact(source.bundle, source.key, artifact));
       expect(actualReason).toBe("accept");
     });
 
     it("verifies a real P-256 messageSignature bundle", async () => {
-      const { bundle, artifact, key } = await messageSignatureFixture("P-256");
+      const { source, artifact } = await messageSignatureFixture("P-256");
       const v = await verifier();
-      const actualReason = await reason(v.verifyArtifact(bundle, key, artifact));
+      const actualReason = await reason(v.verifyArtifact(source.bundle, source.key, artifact));
       expect(actualReason).toBe("accept");
     });
 
     it("accepts the key's own digest length for digest-only verification", async () => {
-      const { bundle, digest, key } = await messageSignatureFixture("P-384");
+      const { source, digest } = await messageSignatureFixture("P-384");
       const v = await verifier({ ...DEFAULTS, verifyDigest: verifySignatureOverDigest });
-      const actualReason = await reason(v.verifyArtifact(bundle, key, digest, true));
+      const actualReason = await reason(v.verifyArtifact(source.bundle, source.key, digest, true));
       expect(actualReason).toBe("accept");
     });
 
     it("rejects a 32-byte digest for a P-384 key before calling verifyDigest", async () => {
-      const { bundle, digest, key } = await messageSignatureFixture("P-384");
+      const { source, digest } = await messageSignatureFixture("P-384");
       const refuse = () => {
         throw new Error("verifyDigest must not be called");
       };
       const v = await verifier({ ...DEFAULTS, verifyDigest: refuse as never });
-      await expect(v.verifyArtifact(bundle, key, digest.slice(0, 32), true)).rejects.toThrow(
+      await expect(v.verifyArtifact(source.bundle, source.key, digest.slice(0, 32), true)).rejects.toThrow(
         "SHA-384 digest must be exactly 48 bytes",
       );
     });
 
     it("rejects a 48-byte digest for a P-256 key", async () => {
-      const { bundle, digest, key } = await messageSignatureFixture("P-256");
+      const { source } = await messageSignatureFixture("P-256");
       const v = await verifier({ ...DEFAULTS, verifyDigest: verifySignatureOverDigest });
-      await expect(v.verifyArtifact(bundle, key, new Uint8Array(48), true)).rejects.toThrow(
+      await expect(v.verifyArtifact(source.bundle, source.key, new Uint8Array(48), true)).rejects.toThrow(
         "SHA-256 digest must be exactly 32 bytes",
       );
-      expect(digest).toHaveLength(32);
     });
 
     it("rejects a digest that is the other algorithm's digest of the artifact", async () => {
-      const { bundle, artifact, key } = await messageSignatureFixture("P-384");
+      const { source, artifact } = await messageSignatureFixture("P-384");
       const sha256 = new Uint8Array(await crypto.subtle.digest("SHA-256", artifact));
-      const swapped = JSON.parse(bundle);
+      const swapped = JSON.parse(source.bundle);
       swapped.messageSignature.messageDigest.digest = Uint8ArrayToBase64(sha256);
       const v = await verifier();
-      const actualReason = await reason(v.verifyArtifact(JSON.stringify(swapped), key, artifact));
+      const actualReason = await reason(v.verifyArtifact(JSON.stringify(swapped), source.key, artifact));
       expect(actualReason).toBe(
         "artifact-mismatch",
       );
     });
 
     it("rejects the other algorithm's label even when the digest stays the key's own", async () => {
-      const { bundle, artifact, key } = await messageSignatureFixture("P-384");
-      const swapped = JSON.parse(bundle);
+      const { source, artifact } = await messageSignatureFixture("P-384");
+      const swapped = JSON.parse(source.bundle);
       swapped.messageSignature.messageDigest.algorithm = "SHA2_256";
       const v = await verifier();
-      const actualReason = await reason(v.verifyArtifact(JSON.stringify(swapped), key, artifact));
+      const actualReason = await reason(v.verifyArtifact(JSON.stringify(swapped), source.key, artifact));
       expect(actualReason).toBe(
         "artifact-mismatch",
       );

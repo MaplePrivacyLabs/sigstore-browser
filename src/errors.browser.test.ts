@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import * as rekor2 from "../test/fixtures/rekor2.js";
 import * as rekor2Dsse from "../test/fixtures/rekor2-dsse.js";
 import * as keyless from "../test/fixtures/sigstore.js";
-import { REASON_CODES, VerificationError } from "./errors.js";
+import { reason } from "../test/helpers.ts";
+import { REASON_CODES } from "./errors.js";
 import { RFC3161Timestamp } from "./rfc3161/index.js";
 import { verifyTLogBody } from "./tlog/body.js";
 import { X509Certificate } from "./x509/index.js";
@@ -12,22 +13,6 @@ import { X509Certificate } from "./x509/index.js";
 // Fixture bundles are parsed JSON that tests change freely.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Json = any;
-
-// The reason code an operation fails with, or "accept". Errors without a code are rethrown.
-async function reason(p: Promise<unknown>): Promise<string> {
-  try {
-    await p;
-    return "accept";
-  } catch (e) {
-    if (e instanceof VerificationError) {
-      return e.code;
-    }
-    if (e instanceof Error && "code" in e && typeof e.code === "string") {
-      return e.code;
-    }
-    throw e;
-  }
-}
 
 const certificateOf = (bundle: Json) =>
   X509Certificate.parse(base64ToUint8Array(bundle.verificationMaterial.certificate.rawBytes));
