@@ -99,7 +99,10 @@ export function assertLoggedV2Verifier(signer: LogSigner, verifier: V2Verifier |
   const details = ManagedPublicKey.curveForKeyDetails(verifier?.keyDetails);
   const curve = ManagedPublicKey.curveOf(logged);
   if (!details || details.namedCurve !== curve) {
-    fail("tlog-key-details-mismatch", `key details ${String(verifier?.keyDetails)} do not match the logged ${curve ?? "unsupported"} key`);
+    const keyDetails = String(verifier?.keyDetails);
+    const curveName = curve ?? "unsupported";
+    const message = `key details ${keyDetails} do not match the logged ${curveName} key`;
+    fail("tlog-key-details-mismatch", message);
   }
   if (!signer.equals(logged)) {
     fail("tlog-key-mismatch", "Public key in TLog entry does not match the verification key");
@@ -133,9 +136,7 @@ function parseCanonicalBody(entry: TLogEntry): RekorEntry {
 
     return rekorEntry;
   } catch (error) {
-    fail(
-      "tlog-entry-malformed",
-      `Failed to parse canonicalized body: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    fail("tlog-entry-malformed", `Failed to parse canonicalized body: ${message}`);
   }
 }

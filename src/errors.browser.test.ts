@@ -117,9 +117,12 @@ describe("RFC 3161 timestamp checks", () => {
   const [token] = bundle.verificationMaterial.timestampVerificationData.rfc3161Timestamps;
   const timestamp = () => RFC3161Timestamp.parse(base64ToUint8Array(token.signedTimestamp));
   const signature = base64ToUint8Array(bundle.dsseEnvelope.signatures[0].sig);
-  const [issuer, authorityRoot] = root.timestampAuthorities[0].certChain.certificates.map(
-    (c: { rawBytes: string }) => X509Certificate.parse(base64ToUint8Array(c.rawBytes)),
-  );
+  const authorityCertificates = root.timestampAuthorities[0].certChain.certificates;
+  const parsedCertificates = authorityCertificates.map((certificate: { rawBytes: string }) => {
+    const bytes = base64ToUint8Array(certificate.rawBytes);
+    return X509Certificate.parse(bytes);
+  });
+  const [issuer, authorityRoot] = parsedCertificates;
 
   it("accepts the timestamp over the signature it covers, with its issuer's key", async () => {
     expect(await reason(timestamp().verify(signature, await issuer.publicKeyObj))).toBe("accept");

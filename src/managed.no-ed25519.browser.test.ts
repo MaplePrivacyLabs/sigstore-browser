@@ -21,7 +21,9 @@ describe("a trusted root with keys this runtime cannot load", () => {
   const root = JSON.parse(rekorV1.root);
 
   it("has two Ed25519 logs", () => {
-    const ed25519Logs = root.tlogs.filter((l: { publicKey: { keyDetails: string } }) => l.publicKey.keyDetails === "PKIX_ED25519");
+    const ed25519Logs = root.tlogs.filter((log: { publicKey: { keyDetails: string } }) => {
+      return log.publicKey.keyDetails === "PKIX_ED25519";
+    });
     expect(ed25519Logs).toHaveLength(2);
   });
 

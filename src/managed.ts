@@ -142,6 +142,11 @@ type JsonObject = Record<string, any>;
 const isObj = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
 const present = (o: unknown, key: string): boolean => isObj(o) && o[key] !== undefined;
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 // Runs one verification step; an error that carries no reason code gets `code`.
 async function step<T>(code: ReasonCode, fn: () => Promise<T> | T): Promise<T> {
   try {
@@ -150,7 +155,8 @@ async function step<T>(code: ReasonCode, fn: () => Promise<T> | T): Promise<T> {
     if (e instanceof VerificationError) {
       throw e;
     }
-    fail(code, e instanceof Error ? e.message : String(e));
+    const message = errorMessage(e);
+    fail(code, message);
   }
 }
 
@@ -195,7 +201,8 @@ async function loadTrustedLog(log: unknown): Promise<TrustedLog | undefined> {
       },
     };
   } catch (e) {
-    return { logId, baseUrl: log.baseUrl, error: e instanceof Error ? e.message : String(e) };
+    const error = errorMessage(e);
+    return { logId, baseUrl: log.baseUrl, error };
   }
 }
 
@@ -240,7 +247,9 @@ function logOrigin(baseUrl: unknown): string | undefined {
 
 // verifyBundle has already required an envelope for "dsse" content; this narrows the type.
 function dsseEnvelope(bundle: SigstoreBundle): DSSEEnvelope {
-  if (!bundle.dsseEnvelope) fail("content-unsupported", "Bundle does not contain a DSSE envelope");
+  if (!bundle.dsseEnvelope) {
+    fail("content-unsupported", "Bundle does not contain a DSSE envelope");
+  }
   return bundle.dsseEnvelope;
 }
 
@@ -398,7 +407,9 @@ export class ManagedKeyVerifier {
       const signature = base64ToUint8Array(env.signatures[0].sig);
       return verifySignature(publicKey, encodedPayload, signature, key.hash);
     });
-    if (!verified) fail("dsse-signature-invalid", "DSSE signature verification failed");
+    if (!verified) {
+      fail("dsse-signature-invalid", "DSSE signature verification failed");
+    }
   }
 
   private async verifySubject(env: DSSEEnvelope, data: Uint8Array, isDigestOnly: boolean): Promise<void> {
@@ -414,7 +425,8 @@ export class ManagedKeyVerifier {
     if (!Array.isArray(subjects) || subjects.length === 0 || subjects.length > MAX_SUBJECTS) {
       fail("artifact-mismatch", `DSSE payload must have between 1 and ${MAX_SUBJECTS} subjects`);
     }
-    const artifactDigest = Uint8ArrayToHex(isDigestOnly ? data : await sha256(data));
+    const digest = isDigestOnly ? data : await sha256(data);
+    const artifactDigest = Uint8ArrayToHex(digest);
     let matched = false;
     for (const subject of subjects) {
       const digests = isObj(subject) ? subject.digest : undefined;
@@ -423,7 +435,9 @@ export class ManagedKeyVerifier {
       }
       matched ||= typeof digests.sha256 === "string" && artifactDigest === digests.sha256.toLowerCase();
     }
-    if (!matched) fail("artifact-mismatch", `Artifact digest ${artifactDigest} does not match any subject in DSSE payload`);
+    if (!matched) {
+      fail("artifact-mismatch", `Artifact digest ${artifactDigest} does not match any subject in DSSE payload`);
+    }
   }
 
   private async verifyMessageSignature(
@@ -452,7 +466,9 @@ export class ManagedKeyVerifier {
     } else {
       verified = await step("message-signature-invalid", () => verifySignature(cryptoKey, data, sig, key.hash));
     }
-    if (!verified) fail("message-signature-invalid", "Artifact signature verification failed");
+    if (!verified) {
+      fail("message-signature-invalid", "Artifact signature verification failed");
+    }
   }
 
   // Checks the bundle in the order of the strict profile, so that the first failure (and its reason
@@ -492,16 +508,29 @@ export class ManagedKeyVerifier {
   private async parseBundle(input: BundleInput): Promise<JsonObject> {
     let parsed: unknown;
     if (typeof input === "string" || input instanceof Uint8Array) {
-      const tooLarge = typeof input === "string"
-        ? exceedsUtf8Bytes(input, this.maxBundleBytes)
-        : input.byteLength > this.maxBundleBytes;
-      if (tooLarge) fail("bundle-too-large", `Bundle is larger than ${this.maxBundleBytes} bytes`);
-      const text = typeof input === "string"
-        ? input
-        : await step("bundle-malformed", () => new TextDecoder("utf-8", { fatal: true }).decode(input));
+      let tooLarge: boolean;
+      if (typeof input === "string") {
+        tooLarge = exceedsUtf8Bytes(input, this.maxBundleBytes);
+      } else {
+        tooLarge = input.byteLength > this.maxBundleBytes;
+      }
+      if (tooLarge) {
+        fail("bundle-too-large", `Bundle is larger than ${this.maxBundleBytes} bytes`);
+      }
+      let text: string;
+      if (typeof input === "string") {
+        text = input;
+      } else {
+        text = await step("bundle-malformed", () => {
+          const decoder = new TextDecoder("utf-8", { fatal: true });
+          return decoder.decode(input);
+        });
+      }
       if (this.options.rejectDuplicateKeys) {
         const duplicate = await step("bundle-malformed", () => findDuplicateKey(text));
-        if (duplicate !== undefined) fail("duplicate-json-key", `Bundle JSON repeats the member ${duplicate}`);
+        if (duplicate !== undefined) {
+          fail("duplicate-json-key", `Bundle JSON repeats the member ${duplicate}`);
+        }
       }
       parsed = await step("bundle-malformed", () => JSON.parse(text));
     } else {
@@ -510,7 +539,9 @@ export class ManagedKeyVerifier {
       }
       parsed = input;
     }
-    if (!isObj(parsed)) fail("bundle-malformed", "Bundle is not a JSON object");
+    if (!isObj(parsed)) {
+      fail("bundle-malformed", "Bundle is not a JSON object");
+    }
     return parsed;
   }
 
@@ -518,7 +549,8 @@ export class ManagedKeyVerifier {
   private bundleVersion(mediaType: unknown): string {
     let version: string;
     try {
-      version = getBundleVersion(typeof mediaType === "string" ? mediaType : "", this.bundleVersions);
+      const spelling = typeof mediaType === "string" ? mediaType : "";
+      version = getBundleVersion(spelling, this.bundleVersions);
     } catch {
       fail("media-type-unsupported", `Unsupported bundle media type: ${String(mediaType)}`);
     }
@@ -601,7 +633,8 @@ export class ManagedKeyVerifier {
         continue;
       }
       if (!log.key) {
-        fail("tlog-log-key-unsupported", `The key of transparency log ${entry.logId.keyId} could not be loaded: ${log.error}`);
+        const message = `The key of transparency log ${entry.logId.keyId} could not be loaded: ${log.error}`;
+        fail("tlog-log-key-unsupported", message);
       }
       const logKey = log.key;
 
@@ -630,7 +663,12 @@ export class ManagedKeyVerifier {
 
   // Inclusion proof up to the checkpoint's root, then the checkpoint: origin (if bound) and the entry's
   // log signature. Signature lines from other keys, such as witness cosignatures, are ignored.
-  private async verifyInclusion(entry: TLogEntry, proof: InclusionProof, log: TrustedLog, logKey: RekorKeyInfo): Promise<void> {
+  private async verifyInclusion(
+    entry: TLogEntry,
+    proof: InclusionProof,
+    log: TrustedLog,
+    logKey: RekorKeyInfo,
+  ): Promise<void> {
     const { note, checkpoint } = await step("checkpoint-malformed", () => {
       const note = SignedNote.fromString(proof.checkpoint.envelope);
       return { note, checkpoint: LogCheckpoint.fromString(note.note) };
@@ -649,7 +687,8 @@ export class ManagedKeyVerifier {
       if (origin === undefined || checkpoint.origin !== origin) {
         const checkpointOrigin = JSON.stringify(checkpoint.origin);
         const expectedOrigin = JSON.stringify(origin ?? log.baseUrl);
-        fail("checkpoint-origin-mismatch", `Checkpoint origin ${checkpointOrigin} does not match the entry's log ${expectedOrigin}`);
+        const message = `Checkpoint origin ${checkpointOrigin} does not match the entry's log ${expectedOrigin}`;
+        fail("checkpoint-origin-mismatch", message);
       }
     }
     const data = stringToUint8Array(note.note);

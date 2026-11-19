@@ -147,17 +147,20 @@ export function assertTimestampVerificationData(data: unknown): asserts data is 
 // Structural validation of a parsed bundle, replacing the compile-time-only type with runtime checks.
 // Entry count is capped at 32 like sigstore-go does. `material` selects the verification material the
 // caller needs: a certificate (the default), or a managed key, which must be the only material present.
-export function assertBundle(b: unknown, material: "certificate" | "publicKey" = "certificate"): asserts b is SigstoreBundle {
+export function assertBundle(
+  b: unknown,
+  material: "certificate" | "publicKey" = "certificate",
+): asserts b is SigstoreBundle {
   const isBoundedStr = boundedStrings();
   check(isObj(b) && isBoundedStr(b.mediaType) && isObj(b.verificationMaterial), "missing mediaType or verificationMaterial");
   const vm = b.verificationMaterial;
 
   if (material === "publicKey") {
-    check(
-      vm.certificate === undefined && vm.x509CertificateChain === undefined && isObj(vm.publicKey) &&
-        (vm.publicKey.hint === undefined || isBoundedStr(vm.publicKey.hint)),
-      "publicKey",
-    );
+    const hasCertificate = vm.certificate !== undefined || vm.x509CertificateChain !== undefined;
+    const hasPublicKey = !hasCertificate && isObj(vm.publicKey);
+    const validPublicKey = hasPublicKey &&
+      (vm.publicKey.hint === undefined || isBoundedStr(vm.publicKey.hint));
+    check(validPublicKey, "publicKey");
   } else {
     const certs = vm.certificate ? [vm.certificate] : vm.x509CertificateChain?.certificates;
     check(Array.isArray(certs) && certs.length > 0 && certs.length <= 32 && certs.every((c: unknown) => isObj(c) && isBoundedStr(c.rawBytes)), "certificate");
