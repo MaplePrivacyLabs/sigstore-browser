@@ -50,7 +50,9 @@ for (const mode of ["strict", "default"] as const) {
   }
 }
 const conformance = await checkConformance(lib, corpus.conformance, noble.verifySignatureOverDigest);
-counts.push(`conformance (artifact+digest): ${corpus.conformance.length * 2 - conformance.length}/${corpus.conformance.length * 2}`);
+const conformanceChecks = corpus.conformance.length * 2;
+const passedConformance = conformanceChecks - conformance.length;
+counts.push(`conformance (artifact+digest): ${passedConformance}/${conformanceChecks}`);
 mismatches.push(...conformance);
 
 console.log(`${runtime}, Ed25519 ${ed25519}`);

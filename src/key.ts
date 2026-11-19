@@ -18,6 +18,8 @@ import {
 import { fail } from "./errors.js";
 
 const OID_EC_PUBLIC_KEY = "1.2.840.10045.2.1";
+const OID_CURVE_P256 = "1.2.840.10045.3.1.7"; // prime256v1
+const OID_CURVE_P384 = "1.3.132.0.34"; // secp384r1
 
 export interface CurveInfo {
   namedCurve: string;
@@ -31,14 +33,14 @@ export interface CurveInfo {
 }
 
 const CURVES: Record<string, CurveInfo> = {
-  "1.2.840.10045.3.1.7": {
+  [OID_CURVE_P256]: {
     namedCurve: EcdsaTypes.P256,
     hash: HashAlgorithms.SHA256,
     keyDetails: "PKIX_ECDSA_P256_SHA_256",
     digestAlgorithm: "SHA2_256",
     digestLength: 32,
   },
-  "1.3.132.0.34": {
+  [OID_CURVE_P384]: {
     namedCurve: EcdsaTypes.P384,
     hash: HashAlgorithms.SHA384,
     keyDetails: "PKIX_ECDSA_P384_SHA_384",
@@ -57,10 +59,17 @@ function ecdsaCurve(spki: Uint8Array): CurveInfo | undefined {
   try {
     const asn1 = ASN1Obj.parseBuffer(spki);
     const algorithm = asn1.subs[0];
-    if (asn1.subs.length !== 2 || algorithm.subs.length !== 2) return undefined;
-    if (algorithm.subs[0].toOID() !== OID_EC_PUBLIC_KEY) return undefined;
+    if (asn1.subs.length !== 2 || algorithm.subs.length !== 2) {
+      return undefined;
+    }
+    if (algorithm.subs[0].toOID() !== OID_EC_PUBLIC_KEY) {
+      return undefined;
+    }
     const oid = algorithm.subs[1].toOID();
-    return Object.prototype.hasOwnProperty.call(CURVES, oid) ? CURVES[oid] : undefined;
+    if (!Object.prototype.hasOwnProperty.call(CURVES, oid)) {
+      return undefined;
+    }
+    return CURVES[oid];
   } catch {
     return undefined;
   }
@@ -113,7 +122,13 @@ export class ManagedPublicKey {
 
   /** Curve and digest named by Rekor key details, if they are ones this verifier understands. */
   static curveForKeyDetails(keyDetails: unknown): CurveInfo | undefined {
-    return typeof keyDetails === "string" && Object.prototype.hasOwnProperty.call(KEY_DETAILS, keyDetails) ? KEY_DETAILS[keyDetails] : undefined;
+    if (typeof keyDetails !== "string") {
+      return undefined;
+    }
+    if (!Object.prototype.hasOwnProperty.call(KEY_DETAILS, keyDetails)) {
+      return undefined;
+    }
+    return KEY_DETAILS[keyDetails];
   }
 
   /** Curve of an encoded SubjectPublicKeyInfo, if it is an ECDSA key on a supported curve. */

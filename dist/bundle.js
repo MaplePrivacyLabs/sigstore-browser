@@ -38,8 +38,11 @@ export function assertBundle(b, material = "certificate") {
     check(isObj(b) && isBoundedStr(b.mediaType) && isObj(b.verificationMaterial), "missing mediaType or verificationMaterial");
     const vm = b.verificationMaterial;
     if (material === "publicKey") {
-        check(vm.certificate === undefined && vm.x509CertificateChain === undefined && isObj(vm.publicKey) &&
-            (vm.publicKey.hint === undefined || isBoundedStr(vm.publicKey.hint)), "publicKey");
+        const hasCertificate = vm.certificate !== undefined || vm.x509CertificateChain !== undefined;
+        const hasPublicKey = !hasCertificate && isObj(vm.publicKey);
+        const validPublicKey = hasPublicKey &&
+            (vm.publicKey.hint === undefined || isBoundedStr(vm.publicKey.hint));
+        check(validPublicKey, "publicKey");
     }
     else {
         const certs = vm.certificate ? [vm.certificate] : vm.x509CertificateChain?.certificates;

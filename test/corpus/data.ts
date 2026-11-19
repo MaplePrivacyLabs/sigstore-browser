@@ -85,14 +85,17 @@ export function loadConformance(
     .sort()
     .map((id) => {
       const vdir = path.join(dir, id);
-      const artifact = existsSync(path.join(vdir, "artifact")) ? path.join(vdir, "artifact") : path.join(dir, "a.txt");
+      const vectorArtifact = path.join(vdir, "artifact");
+      const artifact = existsSync(vectorArtifact) ? vectorArtifact : path.join(dir, "a.txt");
+      const vectorRoot = path.join(vdir, "trusted_root.json");
+      const trustedRoot = existsSync(vectorRoot) ? vectorRoot : productionRoot;
       return {
         id,
         shouldFail: id.endsWith("_fail"),
         bundle: read(path.join(vdir, "bundle.sigstore.json")),
         key: existsSync(path.join(vdir, "key.pub")) ? read(path.join(vdir, "key.pub")) : undefined,
         artifact: readB64(artifact),
-        root: read(existsSync(path.join(vdir, "trusted_root.json")) ? path.join(vdir, "trusted_root.json") : productionRoot),
+        root: read(trustedRoot),
         identity: optional(path.join(vdir, "identity")) ?? DEFAULT_IDENTITY,
         issuer: optional(path.join(vdir, "issuer")) ?? DEFAULT_ISSUER,
       };

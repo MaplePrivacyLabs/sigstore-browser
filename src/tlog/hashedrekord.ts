@@ -123,7 +123,8 @@ async function verifyHashedRekordV002Body(
     }
     const length = base64ToUint8Array(spec.data.digest || "").length;
     if (length !== details?.digestLength) {
-      fail("tlog-digest-malformed", `${spec.data.algorithm} digest is ${length} bytes, expected ${details?.digestLength}`);
+      const message = `${spec.data.algorithm} digest is ${length} bytes, expected ${details?.digestLength}`;
+      fail("tlog-digest-malformed", message);
     }
   }
 
@@ -144,7 +145,8 @@ async function verifyHashedRekordV002Body(
   // NOTE: HashedRekord v0.0.2 uses single base64 encoding (unlike intoto which is double-encoded)
   // Verified against Sigstore conformance test suite bundles
   const tlogSigBytes = base64ToUint8Array(spec.signature.content || "");
-  if (!uint8ArrayEqual(tlogSigBytes, base64ToUint8Array(bundleSigB64))) {
+  const bundleSigBytes = base64ToUint8Array(bundleSigB64);
+  if (!uint8ArrayEqual(tlogSigBytes, bundleSigBytes)) {
     fail("tlog-signature-mismatch", "Signature mismatch between TLog entry and bundle (v0.0.2)");
   }
 

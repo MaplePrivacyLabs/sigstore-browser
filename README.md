@@ -105,9 +105,9 @@ Policies may be synchronous or asynchronous; asynchronous policies are awaited b
 ## Managed-Key Bundles
 
 `ManagedKeyVerifier` verifies bundles signed with a key you already trust instead of a Fulcio
-certificate, for example a KMS key used through `cosign attest-blob --key`. It handles ECDSA
-P-256 and P-384 keys, including P-384 DSSE bundles that Cosign logs in Rekor v2 as
-`hashedrekord` 0.0.2 entries (SHA-384 of the DSSE pre-authentication encoding).
+certificate, for example a KMS key used through `cosign attest-blob --key` or `cosign sign-blob --key`. It handles ECDSA
+P-256 and P-384 keys, including P-384 signature bundles that Cosign logs in Rekor v2 as
+`hashedrekord` 0.0.2 entries (SHA-384 of the DSSE pre-authentication encoding, or of the artifact for a blob signature).
 
 ```typescript
 import { ManagedKeyVerifier, STRICT_MANAGED_KEY_PROFILE, VerificationError } from '@freedomofpress/sigstore-browser';
@@ -126,15 +126,17 @@ try {
 ```
 
 `verifyArtifact(bundle, publicKey, data, isDigestOnly)` checks a `messageSignature`, or an in-toto
-subject, against the artifact or its SHA-256 digest. It accepts either content type whatever the
-options; to require a DSSE envelope, call `verifyDsse`.
+subject, against the artifact or its digest. The digest is the one the content implies: SHA-256 for
+an in-toto subject, or the digest the key implies for a `messageSignature` (SHA-256 for P-256,
+SHA-384 for P-384). It accepts either content type whatever the options; to require a DSSE envelope,
+call `verifyDsse`.
 
 The key you pass is the only key used. A bundle's `publicKey.hint` never selects or installs a
 key, there is no certificate or identity fallback, and a bundle carrying a certificate is
 rejected. A bundle or key that fails verification raises a `VerificationError` whose `code` is one
 of `REASON_CODES`. Misuse raises ordinary errors instead: invalid constructor options, verifying
-before a trusted root is loaded, a digest that is not 32 bytes, a digest-only `messageSignature` without
-`verifyDigest`, and a parsed bundle object while `rejectDuplicateKeys` is set.
+before a trusted root is loaded, a digest of the wrong length for the content and key, a digest-only
+`messageSignature` without `verifyDigest`, and a parsed bundle object while `rejectDuplicateKeys` is set.
 
 By default the checks match the certificate flow: bundle v0.2 and v0.3; every entry from a trusted
 log fully verified (inclusion proof, checkpoint signed by that entry's log key with witness
