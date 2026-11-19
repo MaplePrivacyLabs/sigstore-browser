@@ -196,7 +196,10 @@ function isLoadableAuthority(ca: unknown): ca is RawTimestampAuthority {
     parseValidityPeriod(ca.validFor);
     const certs = ca.certChain?.certificates;
     if (!Array.isArray(certs) || certs.length === 0) return false;
-    certs.forEach((c) => X509Certificate.parse(base64ToUint8Array(c.rawBytes)));
+    for (const certificate of certs) {
+      const bytes = base64ToUint8Array(certificate.rawBytes);
+      X509Certificate.parse(bytes);
+    }
     return true;
   } catch {
     return false;
@@ -208,7 +211,9 @@ function logOrigin(baseUrl: unknown): string | undefined {
   if (typeof baseUrl !== "string") return undefined;
   try {
     const url = new URL(baseUrl);
-    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || !url.hostname) {
+    const isHttp = url.protocol === "https:" || url.protocol === "http:";
+    const hasCredentials = url.username || url.password;
+    if (!isHttp || hasCredentials || !url.hostname) {
       return undefined;
     }
     return url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname;
@@ -226,10 +231,12 @@ function dsseEnvelope(bundle: SigstoreBundle): DSSEEnvelope {
 // At most one variant of each oneof: the content, and the verification material.
 function checkSingleVariants(bundle: JsonObject): void {
   const material = bundle.verificationMaterial;
-  if (
-    ["messageSignature", "dsseEnvelope"].filter((k) => present(bundle, k)).length > 1 ||
-    ["publicKey", "certificate", "x509CertificateChain"].filter((k) => present(material, k)).length > 1
-  ) {
+  const contentVariants = ["messageSignature", "dsseEnvelope"];
+  const materialVariants = ["publicKey", "certificate", "x509CertificateChain"];
+  const contentCount = contentVariants.filter((kind) => present(bundle, kind)).length;
+  const materialCount = materialVariants.filter((kind) => present(material, kind)).length;
+
+  if (contentCount > 1 || materialCount > 1) {
     fail("conflicting-oneof", "Bundle has more than one variant of its content or verification material");
   }
 }
@@ -241,12 +248,14 @@ function checkManagedKeyContent(bundle: JsonObject, content: "dsse" | "artifact"
     fail("verification-material-unsupported", "Managed-key verification needs a bundle with publicKey verification material");
   }
   const env = bundle.dsseEnvelope;
-  const dsse = isObj(env) && Array.isArray(env.signatures) && env.signatures.length === 1;
-  if (!(dsse || (content === "artifact" && isObj(bundle.messageSignature)))) {
-    fail("content-unsupported", content === "dsse"
-      ? "Bundle must contain a DSSE envelope with exactly one signature"
-      : "Bundle must contain a messageSignature or a DSSE envelope with exactly one signature");
+  const hasDsse = isObj(env) && Array.isArray(env.signatures) && env.signatures.length === 1;
+  const hasMessageSignature = content === "artifact" && isObj(bundle.messageSignature);
+  if (hasDsse || hasMessageSignature) return;
+
+  if (content === "dsse") {
+    fail("content-unsupported", "Bundle must contain a DSSE envelope with exactly one signature");
   }
+  fail("content-unsupported", "Bundle must contain a messageSignature or a DSSE envelope with exactly one signature");
 }
 
 function isRekorV2Entry(entry: TLogEntry): boolean {
@@ -266,8 +275,10 @@ export class ManagedKeyVerifier {
   constructor(options: ManagedKeyVerifierOptions = {}) {
     this.options = freezeOptions(options);
     this.bundleVersions = [...(options.bundleVersions ?? ["0.2", "0.3"])];
-    if (!this.bundleVersions.length || this.bundleVersions.some((v) => !BUNDLE_VERSIONS.includes(v))) {
-      throw new Error(`bundleVersions must be a non-empty subset of ${BUNDLE_VERSIONS.join(", ")}`);
+    const hasUnknownVersion = this.bundleVersions.some((version) => !BUNDLE_VERSIONS.includes(version));
+    if (!this.bundleVersions.length || hasUnknownVersion) {
+      const supportedVersions = BUNDLE_VERSIONS.join(", ");
+      throw new Error(`bundleVersions must be a non-empty subset of ${supportedVersions}`);
     }
     this.tlogThreshold = options.tlogThreshold ?? 1;
     this.tsaThreshold = options.tsaThreshold ?? 0;
@@ -343,9 +354,10 @@ export class ManagedKeyVerifier {
         const isDsse = Boolean(parsed.dsseEnvelope);
         const expected = isDsse ? 32 : key.digestLength;
         if (data.byteLength !== expected) {
-          throw new Error(isDsse
-            ? "SHA-256 digest must be exactly 32 bytes"
-            : `${key.hash} digest must be exactly ${expected} bytes`);
+          if (isDsse) {
+            throw new Error("SHA-256 digest must be exactly 32 bytes");
+          }
+          throw new Error(`${key.hash} digest must be exactly ${expected} bytes`);
         }
       }
       if (parsed.dsseEnvelope) {
@@ -359,14 +371,13 @@ export class ManagedKeyVerifier {
   }
 
   private async verifyDsseSignature(env: DSSEEnvelope, key: ManagedPublicKey): Promise<void> {
-    const verified = await step("dsse-signature-invalid", async () =>
-      verifySignature(
-        await key.publicKey,
-        preAuthEncoding(env.payloadType, base64ToUint8Array(env.payload)),
-        base64ToUint8Array(env.signatures[0].sig),
-        key.hash,
-      ),
-    );
+    const verified = await step("dsse-signature-invalid", async () => {
+      const publicKey = await key.publicKey;
+      const payload = base64ToUint8Array(env.payload);
+      const encodedPayload = preAuthEncoding(env.payloadType, payload);
+      const signature = base64ToUint8Array(env.signatures[0].sig);
+      return verifySignature(publicKey, encodedPayload, signature, key.hash);
+    });
     if (!verified) fail("dsse-signature-invalid", "DSSE signature verification failed");
   }
 
@@ -374,7 +385,11 @@ export class ManagedKeyVerifier {
     if (env.payloadType !== IN_TOTO_PAYLOAD_TYPE) {
       fail("payload-type-unsupported", `Unsupported DSSE payload type: ${env.payloadType}`);
     }
-    const statement = await step("artifact-mismatch", () => JSON.parse(Uint8ArrayToString(base64ToUint8Array(env.payload))));
+    const statement = await step("artifact-mismatch", () => {
+      const payload = base64ToUint8Array(env.payload);
+      const text = Uint8ArrayToString(payload);
+      return JSON.parse(text);
+    });
     const subjects: unknown = statement?.subject;
     if (!Array.isArray(subjects) || subjects.length === 0 || subjects.length > MAX_SUBJECTS) {
       fail("artifact-mismatch", `DSSE payload must have between 1 and ${MAX_SUBJECTS} subjects`);
@@ -398,7 +413,11 @@ export class ManagedKeyVerifier {
     isDigestOnly: boolean,
   ): Promise<void> {
     const digest = isDigestOnly ? data : await digestBytes(key.hash, data);
-    if (messageDigest.algorithm !== key.digestAlgorithm || !uint8ArrayEqual(digest, base64ToUint8Array(messageDigest.digest))) {
+    if (messageDigest.algorithm !== key.digestAlgorithm) {
+      fail("artifact-mismatch", "Artifact digest does not match the bundle message digest");
+    }
+    const bundleDigest = base64ToUint8Array(messageDigest.digest);
+    if (!uint8ArrayEqual(digest, bundleDigest)) {
       fail("artifact-mismatch", "Artifact digest does not match the bundle message digest");
     }
     const sig = base64ToUint8Array(signature);
@@ -479,8 +498,9 @@ export class ManagedKeyVerifier {
     } catch {
       fail("media-type-unsupported", `Unsupported bundle media type: ${String(mediaType)}`);
     }
-    if (this.options.requireCanonicalMediaType && mediaType !== `application/vnd.dev.sigstore.bundle.v${version}+json`) {
-      fail("media-type-unsupported", `Bundle media type must be spelled application/vnd.dev.sigstore.bundle.v${version}+json`);
+    const canonicalMediaType = `application/vnd.dev.sigstore.bundle.v${version}+json`;
+    if (this.options.requireCanonicalMediaType && mediaType !== canonicalMediaType) {
+      fail("media-type-unsupported", `Bundle media type must be spelled ${canonicalMediaType}`);
     }
     return version;
   }
@@ -493,9 +513,12 @@ export class ManagedKeyVerifier {
       fail("tlog-entry-count", `Exactly one transparency log entry is required, found ${entries.length}`);
     }
     for (const entry of entries) {
-      const kv = isObj(entry) ? entry.kindVersion : undefined;
-      if (opts.allowedEntryKinds && !opts.allowedEntryKinds.includes(`${kv?.kind}/${kv?.version}`)) {
-        fail("tlog-entry-kind", `Transparency log entry kind ${kv?.kind}/${kv?.version} is not accepted`);
+      const kindVersion = isObj(entry) ? entry.kindVersion : undefined;
+      if (opts.allowedEntryKinds) {
+        const entryKind = `${kindVersion?.kind}/${kindVersion?.version}`;
+        if (!opts.allowedEntryKinds.includes(entryKind)) {
+          fail("tlog-entry-kind", `Transparency log entry kind ${entryKind} is not accepted`);
+        }
       }
       if (opts.rejectIntegratedTime && present(entry, "integratedTime")) {
         fail("integrated-time-present", "Transparency log entry must not carry an integratedTime");
@@ -515,15 +538,20 @@ export class ManagedKeyVerifier {
 
   // Verifies every RFC 3161 timestamp over the bundle signature and returns their times.
   private async verifyTimestamps(bundle: SigstoreBundle): Promise<Date[]> {
-    const signature = base64ToUint8Array(
-      bundle.dsseEnvelope ? bundle.dsseEnvelope.signatures[0].sig : bundle.messageSignature.signature,
-    );
+    let encodedSignature: string;
+    if (bundle.dsseEnvelope) {
+      encodedSignature = bundle.dsseEnvelope.signatures[0].sig;
+    } else {
+      encodedSignature = bundle.messageSignature.signature;
+    }
+    const signature = base64ToUint8Array(encodedSignature);
     const verified = await verifyBundleTimestampForSignature(
       bundle.verificationMaterial.timestampVerificationData,
       signature,
       this.timestampAuthorities,
     );
-    const tsaOperators = countOperators(new Set(verified.map((t) => t.operator)));
+    const operators = new Set(verified.map((timestamp) => timestamp.operator));
+    const tsaOperators = countOperators(operators);
     if (tsaOperators < this.tsaThreshold) {
       fail("timestamp-threshold", `Not enough verified TSA operators: ${tsaOperators} < ${this.tsaThreshold}`);
     }
@@ -558,7 +586,10 @@ export class ManagedKeyVerifier {
         fail("inclusion-proof-missing", "Transparency log entry requires an inclusion proof.");
       }
       if (promise) {
-        integratedTimes.push(await step("inclusion-promise-invalid", () => verifyInclusionPromise(entry, promise, logKey)));
+        const integratedTime = await step("inclusion-promise-invalid", () =>
+          verifyInclusionPromise(entry, promise, logKey),
+        );
+        integratedTimes.push(integratedTime);
       }
       await step("tlog-entry-malformed", () => verifyTLogBody(entry, bundle, key));
       if (entry.inclusionProof) {
@@ -580,7 +611,10 @@ export class ManagedKeyVerifier {
       const note = SignedNote.fromString(proof.checkpoint.envelope);
       return { note, checkpoint: LogCheckpoint.fromString(note.note) };
     });
-    if (checkpoint.logSize !== BigInt(proof.treeSize) || !uint8ArrayEqual(checkpoint.logHash, base64ToUint8Array(proof.rootHash))) {
+    const sameTreeSize = checkpoint.logSize === BigInt(proof.treeSize);
+    // Decode the hash only after the size matches, preserving malformed-input errors.
+    const sameRootHash = sameTreeSize && uint8ArrayEqual(checkpoint.logHash, base64ToUint8Array(proof.rootHash));
+    if (!sameRootHash) {
       fail("inclusion-proof-invalid", "Checkpoint does not match inclusion proof");
     }
     await step("inclusion-proof-invalid", () => verifyMerkleInclusion(entry));
@@ -589,15 +623,22 @@ export class ManagedKeyVerifier {
     if (this.options.checkpointOriginBinding && isRekorV2Entry(entry)) {
       origin = logOrigin(log.baseUrl);
       if (origin === undefined || checkpoint.origin !== origin) {
-        fail("checkpoint-origin-mismatch", `Checkpoint origin ${JSON.stringify(checkpoint.origin)} does not match the entry's log ${JSON.stringify(origin ?? log.baseUrl)}`);
+        const checkpointOrigin = JSON.stringify(checkpoint.origin);
+        const expectedOrigin = JSON.stringify(origin ?? log.baseUrl);
+        fail("checkpoint-origin-mismatch", `Checkpoint origin ${checkpointOrigin} does not match the entry's log ${expectedOrigin}`);
       }
     }
     const data = stringToUint8Array(note.note);
     for (const sig of note.signatures) {
-      if (!uint8ArrayEqual(sig.keyHint, logKey.logId.subarray(0, 4)) || (origin !== undefined && sig.name !== origin)) {
+      const expectedKeyHint = logKey.logId.subarray(0, 4);
+      const sameKeyHint = uint8ArrayEqual(sig.keyHint, expectedKeyHint);
+      const sameOrigin = origin === undefined || sig.name === origin;
+      if (!sameKeyHint || !sameOrigin) {
         continue;
       }
-      if (await verifySignature(logKey.publicKey, data, sig.signature, logKey.hashAlgorithm).catch(() => false)) {
+      const verified = await verifySignature(logKey.publicKey, data, sig.signature, logKey.hashAlgorithm)
+        .catch(() => false);
+      if (verified) {
         return;
       }
     }
