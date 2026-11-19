@@ -26,7 +26,7 @@ import {
 
 import { assertBundle, DSSEEnvelope, InclusionProof, MessageSignature, SigstoreBundle, TLogEntry } from "./bundle.js";
 import { preAuthEncoding } from "./dsse.js";
-import { fail, type ReasonCode, VerificationError } from "./errors.js";
+import { errorMessage, fail, type ReasonCode, VerificationError } from "./errors.js";
 import { parseValidityPeriod, RawTimestampAuthority, RekorKeyInfo, TrustedRoot } from "./interfaces.js";
 import { ManagedPublicKey } from "./key.js";
 import { BUNDLE_VERSIONS, countOperators, getBundleVersion } from "./sigstore.js";
@@ -51,7 +51,10 @@ export interface ManagedKeyVerifierOptions {
   tsaThreshold?: number;
   /** Bundle versions to accept (default ["0.2", "0.3"], as for certificates). */
   bundleVersions?: readonly string[];
-  /** Needed only to verify a messageSignature over a digest: verifySignatureOverDigest from "@freedomofpress/crypto-browser/noble". */
+  /**
+   * Needed only for a messageSignature over a digest: verifySignatureOverDigest from
+   * "@freedomofpress/crypto-browser/noble".
+   */
   verifyDigest?: (key: CryptoKey, digest: Uint8Array, signature: Uint8Array) => Promise<boolean>;
   /** Largest bundle accepted as JSON text or bytes, checked before parsing (default 16 MiB). */
   maxBundleBytes?: number;
@@ -85,11 +88,13 @@ export interface ManagedKeyVerifierOptions {
 
 // Copies an options object, lists included, and freezes the copy, so a verifier keeps the options it
 // was built with even if the caller mutates theirs (or the exported preset) afterwards.
-function freezeOptions(options: ManagedKeyVerifierOptions): Readonly<ManagedKeyVerifierOptions> {
-  const copy = { ...options };
-  if (copy.bundleVersions !== undefined) {
-    copy.bundleVersions = Object.freeze([...copy.bundleVersions]);
-  }
+type FrozenOptions = Readonly<ManagedKeyVerifierOptions> & {
+  readonly bundleVersions: readonly string[];
+};
+
+function freezeOptions(options: ManagedKeyVerifierOptions): FrozenOptions {
+  const { bundleVersions: versions = ["0.2", "0.3"] } = options;
+  const copy = { ...options, bundleVersions: Object.freeze([...versions]) };
   if (copy.allowedEntryKinds !== undefined) {
     copy.allowedEntryKinds = Object.freeze([...copy.allowedEntryKinds]);
   }
@@ -139,11 +144,6 @@ type JsonObject = Record<string, any>;
 const isObj = (v: unknown): v is JsonObject => typeof v === "object" && v !== null && !Array.isArray(v);
 const present = (o: unknown, key: string): boolean => isObj(o) && o[key] !== undefined;
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
-
 // Runs one verification step; an error that carries no reason code gets `code`.
 async function step<T>(code: ReasonCode, fn: () => Promise<T> | T): Promise<T> {
   try {
@@ -186,17 +186,12 @@ async function loadTrustedLog(log: unknown): Promise<TrustedLog | undefined> {
     if (typeof keyDetails !== "string" || typeof rawBytes !== "string") {
       throw new Error("missing public key");
     }
-    return {
-      logId,
-      baseUrl: log.baseUrl,
-      key: {
-        publicKey: await importKey(keyDetails, keyDetails, rawBytes),
-        logId,
-        hashAlgorithm: typeof log.hashAlgorithm === "string" ? log.hashAlgorithm : "",
-        operator: typeof log.operator === "string" ? log.operator : "",
-        validFor: parseValidityPeriod(log.publicKey.validFor),
-      },
-    };
+    const publicKey = await importKey(keyDetails, keyDetails, rawBytes);
+    const hashAlgorithm = typeof log.hashAlgorithm === "string" ? log.hashAlgorithm : "";
+    const operator = typeof log.operator === "string" ? log.operator : "";
+    const validFor = parseValidityPeriod(log.publicKey.validFor);
+    const key = { publicKey, logId, hashAlgorithm, operator, validFor };
+    return { logId, baseUrl: log.baseUrl, key };
   } catch (e) {
     const error = errorMessage(e);
     return { logId, baseUrl: log.baseUrl, error };
@@ -267,7 +262,8 @@ function checkSingleVariants(bundle: JsonObject): void {
 function checkManagedKeyContent(bundle: JsonObject, content: "dsse" | "artifact"): void {
   const material = bundle.verificationMaterial;
   if (!isObj(material) || !isObj(material.publicKey)) {
-    fail("verification-material-unsupported", "Managed-key verification needs a bundle with publicKey verification material");
+    const message = "Managed-key verification needs a bundle with publicKey verification material";
+    fail("verification-material-unsupported", message);
   }
   const env = bundle.dsseEnvelope;
   const hasDsse = isObj(env) && Array.isArray(env.signatures) && env.signatures.length === 1;
@@ -282,36 +278,40 @@ function checkManagedKeyContent(bundle: JsonObject, content: "dsse" | "artifact"
   fail("content-unsupported", "Bundle must contain a messageSignature or a DSSE envelope with exactly one signature");
 }
 
+function expectedDigestLength(envelope: DSSEEnvelope | undefined, key: ManagedPublicKey): number {
+  return envelope ? 32 : key.digestLength;
+}
+
 function isRekorV2Entry(entry: TLogEntry): boolean {
   const { kind, version } = entry.kindVersion;
   return (kind === "hashedrekord" || kind === "dsse") && version === "0.0.2";
 }
 
 export class ManagedKeyVerifier {
-  private readonly options: Readonly<ManagedKeyVerifierOptions>;
+  private readonly options: FrozenOptions;
   private readonly tlogThreshold: number;
   private readonly tsaThreshold: number;
-  private readonly bundleVersions: string[];
   private readonly maxBundleBytes: number;
   private logs: TrustedLog[] | undefined;
   private timestampAuthorities: RawTimestampAuthority[] = [];
 
   constructor(options: ManagedKeyVerifierOptions = {}) {
     this.options = freezeOptions(options);
-    this.bundleVersions = [...(options.bundleVersions ?? ["0.2", "0.3"])];
-    const hasUnknownVersion = this.bundleVersions.some((version) => !BUNDLE_VERSIONS.includes(version));
-    if (!this.bundleVersions.length || hasUnknownVersion) {
+    const versions = this.options.bundleVersions;
+    const hasUnknownVersion = versions.some((version) => !BUNDLE_VERSIONS.includes(version));
+    if (!versions.length || hasUnknownVersion) {
       const supportedVersions = BUNDLE_VERSIONS.join(", ");
       throw new Error(`bundleVersions must be a non-empty subset of ${supportedVersions}`);
     }
     this.tlogThreshold = options.tlogThreshold ?? 1;
     this.tsaThreshold = options.tsaThreshold ?? 0;
     this.maxBundleBytes = options.maxBundleBytes ?? DEFAULT_MAX_BUNDLE_BYTES;
-    for (const [name, value] of Object.entries({
+    const limits = {
       tlogThreshold: this.tlogThreshold,
       tsaThreshold: this.tsaThreshold,
       maxBundleBytes: this.maxBundleBytes,
-    })) {
+    };
+    for (const [name, value] of Object.entries(limits)) {
       if (!Number.isSafeInteger(value) || value < 0) {
         throw new Error(`${name} must be a non-negative safe integer`);
       }
@@ -355,9 +355,10 @@ export class ManagedKeyVerifier {
       this.verifyDsseSignature(dsseEnvelope(parsed), key),
     );
     const env = dsseEnvelope(verified.bundle);
+    const payload = base64ToUint8Array(env.payload);
     return {
       payloadType: env.payloadType,
-      payload: base64ToUint8Array(env.payload),
+      payload,
       timestamps: verified.timestamps,
     };
   }
@@ -376,19 +377,17 @@ export class ManagedKeyVerifier {
   ): Promise<true> {
     const key = ManagedPublicKey.from(publicKey);
     await this.verifyBundle(bundle, key, "artifact", async (parsed) => {
+      const envelope = parsed.dsseEnvelope;
       if (isDigestOnly) {
-        const isDsse = Boolean(parsed.dsseEnvelope);
-        const expected = isDsse ? 32 : key.digestLength;
-        if (data.byteLength !== expected) {
-          if (isDsse) {
-            throw new Error("SHA-256 digest must be exactly 32 bytes");
-          }
-          throw new Error(`${key.hash} digest must be exactly ${expected} bytes`);
+        const expectedLength = expectedDigestLength(envelope, key);
+        if (data.byteLength !== expectedLength) {
+          const hash = envelope ? "SHA-256" : key.hash;
+          throw new Error(`${hash} digest must be exactly ${expectedLength} bytes`);
         }
       }
-      if (parsed.dsseEnvelope) {
-        await this.verifyDsseSignature(parsed.dsseEnvelope, key);
-        await this.verifySubject(parsed.dsseEnvelope, data, isDigestOnly);
+      if (envelope) {
+        await this.verifyDsseSignature(envelope, key);
+        await this.verifySubject(envelope, data, isDigestOnly);
       } else {
         await this.verifyMessageSignature(parsed.messageSignature, key, data, isDigestOnly);
       }
@@ -419,18 +418,36 @@ export class ManagedKeyVerifier {
       return JSON.parse(text);
     });
     const subjects: unknown = statement?.subject;
-    if (!Array.isArray(subjects) || subjects.length === 0 || subjects.length > MAX_SUBJECTS) {
-      fail("artifact-mismatch", `DSSE payload must have between 1 and ${MAX_SUBJECTS} subjects`);
+    const invalidSubjects = `DSSE payload must have between 1 and ${MAX_SUBJECTS} subjects`;
+    if (!Array.isArray(subjects)) {
+      fail("artifact-mismatch", invalidSubjects);
+    }
+    const subjectCountInRange = subjects.length > 0 && subjects.length <= MAX_SUBJECTS;
+    if (!subjectCountInRange) {
+      fail("artifact-mismatch", invalidSubjects);
     }
     const digest = isDigestOnly ? data : await sha256(data);
     const artifactDigest = Uint8ArrayToHex(digest);
     let matched = false;
     for (const subject of subjects) {
       const digests = isObj(subject) ? subject.digest : undefined;
-      if (!isObj(digests) || Object.keys(digests).length > MAX_SUBJECT_DIGESTS) {
-        fail("artifact-mismatch", `Invalid DSSE subject digest map (maximum ${MAX_SUBJECT_DIGESTS} digests)`);
+      const invalidDigests = `Invalid DSSE subject digest map (maximum ${MAX_SUBJECT_DIGESTS} digests)`;
+      if (!isObj(digests)) {
+        fail("artifact-mismatch", invalidDigests);
       }
-      matched ||= typeof digests.sha256 === "string" && artifactDigest === digests.sha256.toLowerCase();
+      const digestCount = Object.keys(digests).length;
+      if (digestCount > MAX_SUBJECT_DIGESTS) {
+        fail("artifact-mismatch", invalidDigests);
+      }
+      if (matched) {
+        continue;
+      }
+      const subjectDigest = digests.sha256;
+      if (typeof subjectDigest !== "string") {
+        continue;
+      }
+      const normalizedDigest = subjectDigest.toLowerCase();
+      matched = artifactDigest === normalizedDigest;
     }
     if (!matched) {
       fail("artifact-mismatch", `Artifact digest ${artifactDigest} does not match any subject in DSSE payload`);
@@ -505,24 +522,7 @@ export class ManagedKeyVerifier {
   private async parseBundle(input: BundleInput): Promise<JsonObject> {
     let parsed: unknown;
     if (typeof input === "string" || input instanceof Uint8Array) {
-      let tooLarge: boolean;
-      if (typeof input === "string") {
-        tooLarge = exceedsUtf8Bytes(input, this.maxBundleBytes);
-      } else {
-        tooLarge = input.byteLength > this.maxBundleBytes;
-      }
-      if (tooLarge) {
-        fail("bundle-too-large", `Bundle is larger than ${this.maxBundleBytes} bytes`);
-      }
-      let text: string;
-      if (typeof input === "string") {
-        text = input;
-      } else {
-        text = await step("bundle-malformed", () => {
-          const decoder = new TextDecoder("utf-8", { fatal: true });
-          return decoder.decode(input);
-        });
-      }
+      const text = await this.bundleText(input);
       parsed = await step("bundle-malformed", () => JSON.parse(text));
     } else {
       parsed = input;
@@ -533,12 +533,29 @@ export class ManagedKeyVerifier {
     return parsed;
   }
 
+  // Check the byte bound before decoding or parsing a serialized bundle.
+  private async bundleText(input: string | Uint8Array): Promise<string> {
+    if (typeof input === "string") {
+      if (exceedsUtf8Bytes(input, this.maxBundleBytes)) {
+        fail("bundle-too-large", `Bundle is larger than ${this.maxBundleBytes} bytes`);
+      }
+      return input;
+    }
+    if (input.byteLength > this.maxBundleBytes) {
+      fail("bundle-too-large", `Bundle is larger than ${this.maxBundleBytes} bytes`);
+    }
+    return step("bundle-malformed", () => {
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      return decoder.decode(input);
+    });
+  }
+
   // The bundle version named by an enabled media type, in the canonical spelling if that is required.
   private bundleVersion(mediaType: unknown): string {
     let version: string;
     try {
       const spelling = typeof mediaType === "string" ? mediaType : "";
-      version = getBundleVersion(spelling, this.bundleVersions);
+      version = getBundleVersion(spelling, this.options.bundleVersions);
     } catch {
       fail("media-type-unsupported", `Unsupported bundle media type: ${String(mediaType)}`);
     }
@@ -627,7 +644,8 @@ export class ManagedKeyVerifier {
       const logKey = log.key;
 
       const promise = entry.inclusionPromise?.signedEntryTimestamp;
-      if (!entry.inclusionProof && (requireProof || !promise)) {
+      const proofRequired = requireProof || !promise;
+      if (!entry.inclusionProof && proofRequired) {
         fail("inclusion-proof-missing", "Transparency log entry requires an inclusion proof.");
       }
       if (promise) {
@@ -659,11 +677,16 @@ export class ManagedKeyVerifier {
   ): Promise<void> {
     const { note, checkpoint } = await step("checkpoint-malformed", () => {
       const note = SignedNote.fromString(proof.checkpoint.envelope);
-      return { note, checkpoint: LogCheckpoint.fromString(note.note) };
+      const checkpoint = LogCheckpoint.fromString(note.note);
+      return { note, checkpoint };
     });
     const sameTreeSize = checkpoint.logSize === BigInt(proof.treeSize);
-    // Decode the hash only after the size matches, preserving malformed-input errors.
-    const sameRootHash = sameTreeSize && uint8ArrayEqual(checkpoint.logHash, base64ToUint8Array(proof.rootHash));
+    if (!sameTreeSize) {
+      fail("inclusion-proof-invalid", "Checkpoint does not match inclusion proof");
+    }
+    // Preserve the size check before decoding a possibly malformed hash.
+    const proofRootHash = base64ToUint8Array(proof.rootHash);
+    const sameRootHash = uint8ArrayEqual(checkpoint.logHash, proofRootHash);
     if (!sameRootHash) {
       fail("inclusion-proof-invalid", "Checkpoint does not match inclusion proof");
     }

@@ -3,6 +3,7 @@
 import { verifySignatureOverDigest } from "@freedomofpress/crypto-browser/noble";
 
 import type * as library from "../../src/index.ts";
+import { base64ToBytes } from "../helpers.ts";
 import type { ConformanceVector, Corpus, Expected, ManagedKeyVector } from "./data.ts";
 
 /** The parts of the library the checks use: the source in tests, the built dist/ in runtime-matrix.ts. */
@@ -24,16 +25,15 @@ export interface Mismatch {
 export type Mode = "strict" | "default";
 export type How = "dsse" | "artifact" | "digest";
 
-export const base64ToBytes = (b64: string): Uint8Array => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 const sha256 = async (data: Uint8Array) => new Uint8Array(await crypto.subtle.digest("SHA-256", data));
 
 // The digest a messageSignature signed: the hash the key implies (SHA-256 for P-256, SHA-384 for
 // P-384). DSSE bundles keep SHA-256, matching their in-toto subject digests.
-const P256_ALGID = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
-const P384_ALGID = [0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22];
-function hasCurve(der: Uint8Array, algorithmId: number[]): boolean {
-  for (let offset = 0; offset + algorithmId.length <= der.length; offset++) {
-    const matches = algorithmId.every((byte, index) => der[offset + index] === byte);
+const P256_OID_TLV = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+const P384_OID_TLV = [0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22];
+function hasCurve(der: Uint8Array, oid: number[]): boolean {
+  for (let offset = 0; offset + oid.length <= der.length; offset++) {
+    const matches = oid.every((byte, index) => der[offset + index] === byte);
     if (matches) {
       return true;
     }
@@ -45,10 +45,10 @@ function blobDigestAlgorithm(key: string): string {
   const encodedKey = key.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
   const der = base64ToBytes(encodedKey);
   // Trial imports are not portable: Firefox accepts a P-256 key requested as P-384.
-  if (hasCurve(der, P384_ALGID)) {
+  if (hasCurve(der, P384_OID_TLV)) {
     return "SHA-384";
   }
-  if (hasCurve(der, P256_ALGID)) {
+  if (hasCurve(der, P256_OID_TLV)) {
     return "SHA-256";
   }
   throw new Error("unrecognized EC curve in SPKI");
@@ -163,7 +163,8 @@ export async function verifyManagedKeyVector(lib: Lib, v: ManagedKeyVector, mode
   const profile = mode === "strict" ? lib.STRICT_MANAGED_KEY_PROFILE : {};
   const options = { ...profile, verifyDigest: verifySignatureOverDigest };
   const verifier = new lib.ManagedKeyVerifier(options);
-  await verifier.loadTrustedRoot(JSON.parse(v.root));
+  const root = JSON.parse(v.root);
+  await verifier.loadTrustedRoot(root);
   return outcome(async () => {
     if (how === "dsse") {
       await verifier.verifyDsse(v.bundle, v.key);
@@ -175,11 +176,23 @@ export async function verifyManagedKeyVector(lib: Lib, v: ManagedKeyVector, mode
   });
 }
 
-const matches = (expected: Expected, actual: Outcome) =>
-  expected.result === actual.result && (expected.result === "accept" || expected.code === actual.code);
+function matches(expected: Expected, actual: Outcome): boolean {
+  if (expected.result !== actual.result) {
+    return false;
+  }
+  if (expected.result === "accept") {
+    return true;
+  }
+  return expected.code === actual.code;
+}
 
 /** Every managed-key vector, plus a check that each negative's parent is accepted in the same mode. */
-export async function checkManagedKeyCorpus(lib: Lib, vectors: ManagedKeyVector[], mode: Mode, how: How): Promise<Mismatch[]> {
+export async function checkManagedKeyCorpus(
+  lib: Lib,
+  vectors: ManagedKeyVector[],
+  mode: Mode,
+  how: How,
+): Promise<Mismatch[]> {
   const mismatches: Mismatch[] = [];
   const outcomes = new Map<string, Outcome>();
   const byId = new Map(vectors.map((v) => [v.id, v]));
@@ -231,7 +244,8 @@ export async function checkConformance(
       const actual = await outcome(async () => {
         if (v.key !== undefined) {
           const verifier = new lib.ManagedKeyVerifier({ bundleVersions, verifyDigest });
-          await verifier.loadTrustedRoot(JSON.parse(v.root));
+          const root = JSON.parse(v.root);
+  await verifier.loadTrustedRoot(root);
           await verifier.verifyArtifact(v.bundle, v.key, data, digestOnly);
         } else {
           const verifier = new lib.SigstoreVerifier({ bundleVersions, verifyDigest });

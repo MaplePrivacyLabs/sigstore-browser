@@ -55,12 +55,19 @@ async function verifyHashedRekordV002Body(entry, bundle, signer) {
     if (signer instanceof ManagedPublicKey) {
         const keyDetails = spec.signature.verifier?.keyDetails;
         const details = ManagedPublicKey.curveForKeyDetails(keyDetails);
-        if (spec.data?.algorithm !== details?.digestAlgorithm) {
-            fail("tlog-digest-algorithm-mismatch", `digest algorithm ${String(spec.data?.algorithm)} does not match key details ${String(keyDetails)}`);
+        const loggedAlgorithm = spec.data?.algorithm;
+        const expectedAlgorithm = details?.digestAlgorithm;
+        if (loggedAlgorithm !== expectedAlgorithm) {
+            const algorithmName = String(loggedAlgorithm);
+            const detailsName = String(keyDetails);
+            const message = `digest algorithm ${algorithmName} does not match key details ${detailsName}`;
+            fail("tlog-digest-algorithm-mismatch", message);
         }
-        const length = base64ToUint8Array(spec.data.digest || "").length;
-        if (length !== details?.digestLength) {
-            const message = `${spec.data.algorithm} digest is ${length} bytes, expected ${details?.digestLength}`;
+        const loggedDigest = base64ToUint8Array(spec.data.digest || "");
+        const length = loggedDigest.length;
+        const expectedLength = details?.digestLength;
+        if (length !== expectedLength) {
+            const message = `${spec.data.algorithm} digest is ${length} bytes, expected ${expectedLength}`;
             fail("tlog-digest-malformed", message);
         }
     }

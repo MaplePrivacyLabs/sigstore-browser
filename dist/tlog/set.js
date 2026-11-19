@@ -3,7 +3,8 @@ import { base64ToUint8Array, canonicalizeJCS, stringToUint8Array, Uint8ArrayToHe
 export async function verifyInclusionPromise(entry, promise, log) {
     const integratedTime = Number(entry.integratedTime);
     const integratedDate = new Date(integratedTime * 1000);
-    if (integratedDate < log.validFor.start || integratedDate > log.validFor.end) {
+    const validAtIntegration = !(integratedDate < log.validFor.start || integratedDate > log.validFor.end);
+    if (!validAtIntegration) {
         throw new Error("Rekor key was not valid at the integrated time.");
     }
     const canonicalEntry = canonicalizeJCS({

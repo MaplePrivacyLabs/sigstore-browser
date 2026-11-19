@@ -28,13 +28,17 @@ if (process.env.NO_NATIVE_ED25519) {
   cryptoBrowser.setSubtle(noble.withEd25519Fallback(noEd25519));
   const subtle = await cryptoBrowser.getSubtle();
   const probe = await subtle.importKey("raw", new Uint8Array(32), { name: "Ed25519" }, true, ["verify"]);
-  if ((probe as unknown as { __fallback__?: boolean }).__fallback__ !== true) {
+  const fallbackProbe = probe as unknown as { __fallback__?: boolean };
+  const usesFallback = fallbackProbe.__fallback__ === true;
+  if (!usesFallback) {
     throw new Error("Ed25519 keys are still native; the fallback would not run");
   }
-  const direct = await noEd25519.importKey("raw", new Uint8Array(32), { name: "Ed25519" }, true, ["verify"]).then(
-    () => "native",
-    () => "rejected",
-  );
+  let direct = "native";
+  try {
+    await noEd25519.importKey("raw", new Uint8Array(32), { name: "Ed25519" }, true, ["verify"]);
+  } catch {
+    direct = "rejected";
+  }
   ed25519 = `@noble/curves fallback (native Ed25519 ${direct})`;
 }
 

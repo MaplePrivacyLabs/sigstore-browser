@@ -45,3 +45,5 @@ export declare const REASON_CODES: readonly ["bundle-too-large", "bundle-malform
 export type ReasonCode = (typeof REASON_CODES)[number];
 /** Throws a VerificationError whose code is one of REASON_CODES. */
 export declare function fail(code: ReasonCode, message: string): never;
+/** The message carried by an error, including values thrown without an Error wrapper. */
+export declare function errorMessage(error: unknown): string;

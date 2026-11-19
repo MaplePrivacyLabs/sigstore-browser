@@ -50,6 +50,7 @@ function ecdsaCurve(spki) {
 export class ManagedPublicKey {
     constructor(spki, curve) {
         this.spki = spki;
+        // Snapshot the metadata: curveForKeyDetails exposes the shared table to callers.
         this.namedCurve = curve.namedCurve;
         this.hash = curve.hash;
         this.keyDetails = curve.keyDetails;
@@ -102,8 +103,14 @@ export class ManagedPublicKey {
         return uint8ArrayEqual(this.spki, spki);
     }
     get publicKey() {
-        this.cryptoKey ?? (this.cryptoKey = importKey(KeyTypes.Ecdsa, this.namedCurve, Uint8ArrayToBase64(this.spki)).catch(() => fail("key-unsupported", "Public key could not be imported")));
+        this.cryptoKey ?? (this.cryptoKey = this.importPublicKey());
         return this.cryptoKey;
+    }
+    importPublicKey() {
+        const encodedKey = Uint8ArrayToBase64(this.spki);
+        return importKey(KeyTypes.Ecdsa, this.namedCurve, encodedKey).catch(() => {
+            fail("key-unsupported", "Public key could not be imported");
+        });
     }
 }
 //# sourceMappingURL=key.js.map

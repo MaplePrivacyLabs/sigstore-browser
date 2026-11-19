@@ -158,9 +158,12 @@ export function assertBundle(
   if (material === "publicKey") {
     const hasCertificate = vm.certificate !== undefined || vm.x509CertificateChain !== undefined;
     const hasPublicKey = !hasCertificate && isObj(vm.publicKey);
-    const validPublicKey = hasPublicKey &&
-      (vm.publicKey.hint === undefined || isBoundedStr(vm.publicKey.hint));
-    check(validPublicKey, "publicKey");
+    let hasValidHint = false;
+    if (hasPublicKey) {
+      const hint = vm.publicKey.hint;
+      hasValidHint = hint === undefined || isBoundedStr(hint);
+    }
+    check(hasValidHint, "publicKey");
   } else {
     const certs = vm.certificate ? [vm.certificate] : vm.x509CertificateChain?.certificates;
     check(Array.isArray(certs) && certs.length > 0 && certs.length <= 32 && certs.every((c: unknown) => isObj(c) && isBoundedStr(c.rawBytes)), "certificate");

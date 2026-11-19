@@ -129,4 +129,11 @@ export const REASON_CODES = [
 export function fail(code, message) {
     throw new VerificationError(code, message);
 }
+/** The message carried by an error, including values thrown without an Error wrapper. */
+export function errorMessage(error) {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    return String(error);
+}
 //# sourceMappingURL=errors.js.map

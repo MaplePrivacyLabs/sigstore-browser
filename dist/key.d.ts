@@ -27,4 +27,5 @@ export declare class ManagedPublicKey {
     /** True if `spki` is byte-for-byte this key's SubjectPublicKeyInfo. */
     equals(spki: Uint8Array): boolean;
     get publicKey(): Promise<CryptoKey>;
+    private importPublicKey;
 }

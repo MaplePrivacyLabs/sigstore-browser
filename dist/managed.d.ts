@@ -8,7 +8,10 @@ export interface ManagedKeyVerifierOptions {
     tsaThreshold?: number;
     /** Bundle versions to accept (default ["0.2", "0.3"], as for certificates). */
     bundleVersions?: readonly string[];
-    /** Needed only to verify a messageSignature over a digest: verifySignatureOverDigest from "@freedomofpress/crypto-browser/noble". */
+    /**
+     * Needed only for a messageSignature over a digest: verifySignatureOverDigest from
+     * "@freedomofpress/crypto-browser/noble".
+     */
     verifyDigest?: (key: CryptoKey, digest: Uint8Array, signature: Uint8Array) => Promise<boolean>;
     /** Largest bundle accepted as JSON text or bytes, checked before parsing (default 16 MiB). */
     maxBundleBytes?: number;
@@ -55,7 +58,6 @@ export declare class ManagedKeyVerifier {
     private readonly options;
     private readonly tlogThreshold;
     private readonly tsaThreshold;
-    private readonly bundleVersions;
     private readonly maxBundleBytes;
     private logs;
     private timestampAuthorities;
@@ -90,6 +92,7 @@ export declare class ManagedKeyVerifier {
     private verifyMessageSignature;
     private verifyBundle;
     private parseBundle;
+    private bundleText;
     private bundleVersion;
     private checkProfileLimits;
     private verifyTimestamps;

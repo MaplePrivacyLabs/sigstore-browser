@@ -138,3 +138,11 @@ export type ReasonCode = (typeof REASON_CODES)[number];
 export function fail(code: ReasonCode, message: string): never {
   throw new VerificationError(code, message);
 }
+
+/** The message carried by an error, including values thrown without an Error wrapper. */
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
