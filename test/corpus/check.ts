@@ -29,15 +29,22 @@ const sha256 = async (data: Uint8Array) => new Uint8Array(await crypto.subtle.di
 
 // The digest a messageSignature signed: the hash the key implies (SHA-256 for P-256, SHA-384 for
 // P-384). DSSE bundles keep SHA-256, matching their in-toto subject digests.
+const P256_ALGID = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+const P384_ALGID = [0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22];
+const hasCurve = (der: Uint8Array, algid: number[]) => {
+  outer: for (let i = 0; i + algid.length <= der.length; i++) {
+    for (let j = 0; j < algid.length; j++) if (der[i + j] !== algid[j]) continue outer;
+    return true;
+  }
+  return false;
+};
 const digestForVector = async (v: ManagedKeyVector, artifact: Uint8Array): Promise<Uint8Array> => {
   if (!JSON.parse(v.bundle).messageSignature) return sha256(artifact);
   const der = base64ToBytes(v.key.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""));
-  try {
-    await crypto.subtle.importKey("spki", der, { name: "ECDSA", namedCurve: "P-384" }, false, ["verify"]);
-    return new Uint8Array(await crypto.subtle.digest("SHA-384", artifact));
-  } catch {
-    return sha256(artifact);
-  }
+  // Read the curve from the SPKI algorithm identifier: trial imports are not
+  // portable (some engines accept a P-256 key where P-384 is requested).
+  const name = hasCurve(der, P384_ALGID) ? "SHA-384" : hasCurve(der, P256_ALGID) ? "SHA-256" : (() => { throw new Error("unrecognized EC curve in SPKI"); })();
+  return new Uint8Array(await crypto.subtle.digest(name, artifact));
 };
 
 /**

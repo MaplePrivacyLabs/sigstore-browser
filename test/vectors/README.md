@@ -13,14 +13,14 @@
 
 `managed-key/` is copied byte for byte from `test-vectors/managed-key` in
 <https://github.com/MaplePrivacyLabs/sigstore-rust>, a sigstore-rust fork that holds the original,
-at commit `7f23f0d5f63ff0806e3e91f2b783fb5a59074fd2`. Paths in `managed-key/README.md` that name
+at commit `47e17243e38f6aaa472008c2187b43e143b14211`. Paths in `managed-key/README.md` that name
 Rust files refer to that repository, and "this library" there means sigstore-rust. Do not edit the
 directory here. To compare it with its source and check that it regenerates (Python 3 and the
 OpenSSL 3.2+ command line):
 
 ```sh
 git clone https://github.com/MaplePrivacyLabs/sigstore-rust
-git -C sigstore-rust checkout 7f23f0d5f63ff0806e3e91f2b783fb5a59074fd2
+git -C sigstore-rust checkout 47e17243e38f6aaa472008c2187b43e143b14211
 diff -r sigstore-rust/test-vectors/managed-key test/vectors/managed-key
 python3 test/vectors/managed-key/generate.py --check
 ```

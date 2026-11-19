@@ -33,8 +33,8 @@ describe("managed-key corpus", () => {
   const rejected = corpus.managedKey.filter((v) => v.expected.profile.result === "reject").length;
   const accepted = corpus.managedKey.length - rejected;
 
-  it("has all 50 vectors", () => {
-    expect(corpus.managedKey).toHaveLength(50);
+  it("has all 56 vectors", () => {
+    expect(corpus.managedKey).toHaveLength(56);
   });
 
   it("records only reason codes this library reports", () => {
